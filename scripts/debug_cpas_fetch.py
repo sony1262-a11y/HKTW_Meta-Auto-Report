@@ -111,10 +111,11 @@ def debug_fetch_market(market: str, date_start: str, date_stop: str, pa: PowerAu
             # Save raw JSON-style rows (scalar fields only — no nested arrays)
             for r in rows:
                 flat_raw = {k: v for k, v in r.items() if not isinstance(v, list)}
-                # Expand actions array as JSON string for inspection
-                flat_raw["_actions_json"]       = json.dumps(r.get("actions", []))
-                flat_raw["_action_values_json"]  = json.dumps(r.get("action_values", []))
-                flat_raw["_purchase_roas_json"]  = json.dumps(r.get("purchase_roas", []))
+                flat_raw["_actions_json"]                = json.dumps(r.get("actions", []))
+                flat_raw["_action_values_json"]          = json.dumps(r.get("action_values", []))
+                flat_raw["_purchase_roas_json"]          = json.dumps(r.get("purchase_roas", []))
+                flat_raw["_catalog_segment_actions_json"]= json.dumps(r.get("catalog_segment_actions", []))
+                flat_raw["_catalog_segment_value_json"]  = json.dumps(r.get("catalog_segment_value", []))
                 all_raw_rows.append(flat_raw)
 
             all_flat_rows.extend(rows)
@@ -199,10 +200,25 @@ def main():
     logger.info("=" * 60)
 
     all_summaries = []
+    all_transformed = []
     pa = PowerAutomateClient()
     for m in markets_to_run:
         s = debug_fetch_market(m, date_start, date_stop, pa)
         all_summaries.append(s)
+        # Collect transformed data for merged file
+        t_file = os.path.join(OUTPUT_DIR, f"CPAS_transformed_{m}_{date_start}_{date_stop}.xlsx")
+        if os.path.exists(t_file):
+            try:
+                df_t = pd.read_excel(t_file)
+                all_transformed.append(df_t)
+            except Exception:
+                pass
+
+    # ── Save merged HKTW transformed file ────────────────────────────────────
+    if all_transformed:
+        df_merged = pd.concat(all_transformed, ignore_index=True)
+        save_excel(df_merged, f"CPAS_transformed_HKTW_{date_start}_{date_stop}.xlsx", "CPAS Data")
+        logger.info(f"Merged HKTW file saved: {len(df_merged)} rows")
 
     # ── Write summary txt ─────────────────────────────────────────────────────
     run_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")

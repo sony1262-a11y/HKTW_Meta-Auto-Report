@@ -45,6 +45,7 @@ INSIGHT_FIELDS = [
     "spend", "reach", "frequency", "impressions",
     "cpm", "cpc", "ctr",
     "actions", "action_values", "purchase_roas",
+    "catalog_segment_actions", "catalog_segment_value",
     "date_start", "date_stop",
 ]
 

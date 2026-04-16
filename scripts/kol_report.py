@@ -167,7 +167,15 @@ def fetch_market(
         logger.warning(f"[{market}] No data returned")
         return pd.DataFrame(columns=OUTPUT_COLUMNS)
 
-    return transform(all_rows, fx_rates=fx_rates)
+    # ── Page Name lookup via batch API ────────────────────────────────────────
+    unique_ad_ids = list({str(r.get("ad_id", "")) for r in all_rows if r.get("ad_id")})
+    page_name_map: dict[str, str] = {}
+    try:
+        page_name_map = client.get_page_names_for_ads(unique_ad_ids)
+    except Exception as e:
+        logger.warning(f"[{market}] Page name lookup failed — Page Name will be blank: {e}")
+
+    return transform(all_rows, fx_rates=fx_rates, page_name_map=page_name_map)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

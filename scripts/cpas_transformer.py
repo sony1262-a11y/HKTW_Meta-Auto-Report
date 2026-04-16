@@ -205,44 +205,52 @@ def get_channel(account_name: str) -> str:
 # Meta API field → DataFrame column mapping
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Maps Meta API action_type values to column names
+# Standard actions (non-CPAS metrics)
 ACTION_MAP = {
-    "link_click":                               "Link clicks",
-    "outbound_click":                           "Outbound clicks",
-    "omni_view_content":                        "Content views with shared items",
-    "omni_add_to_cart":                         "Adds to cart with shared items",
-    "omni_purchase":                            "Purchases with Shared Items",
-    "offsite_conversion.fb_pixel_view_content": "Website content views with shared items",
-    "app_custom_event.fb_mobile_content_view":  "In-app content views with shared items",
-    "offsite_conversion.fb_pixel_add_to_cart":  "Website adds to cart with shared items",
-    "app_custom_event.fb_mobile_add_to_cart":   "In-app adds to cart with shared items",
-    "offsite_conversion.fb_pixel_purchase":     "Website purchases with shared items",
-    "app_custom_event.fb_mobile_purchase":      "In-app purchases with shared items",
-    "video_view":                               "3-second video plays",
-    "video_thruplay_watched":                   "ThruPlays",
-    "video_p25_watched_actions":                "Video plays at 25%",
-    "video_p50_watched_actions":                "Video plays at 50%",
-    "video_p75_watched_actions":                "Video plays at 75%",
-    "video_p100_watched_actions":               "Video plays at 100%",
-    "post_engagement":                          "Post engagements",
-    "post_reaction":                            "Post reactions",
-    "comment":                                  "Post comments",
-    "post":                                     "Post shares",
+    "link_click":                "Link clicks",
+    "outbound_click":            "Outbound clicks",
+    "video_view":                "3-second video plays",
+    "video_thruplay_watched":    "ThruPlays",
+    "video_p25_watched_actions": "Video plays at 25%",
+    "video_p50_watched_actions": "Video plays at 50%",
+    "video_p75_watched_actions": "Video plays at 75%",
+    "video_p100_watched_actions":"Video plays at 100%",
+    "post_engagement":           "Post engagements",
+    "post_reaction":             "Post reactions",
+    "comment":                   "Post comments",
+    "post":                      "Post shares",
 }
 
-ACTION_VALUE_MAP = {
-    "omni_purchase":                            "Purchases conversion value for shared items only",
+# CPAS conversion metrics come from catalog_segment_actions
+CATALOG_ACTION_MAP = {
+    "omni_view_content":   "Content views with shared items",
+    "omni_add_to_cart":    "Adds to cart with shared items",
+    "omni_purchase":       "Purchases with Shared Items",
+    "converted_promoted_product_omni_purchase": "Purchases with Shared Items",
+    # website / in-app breakdown
+    "offsite_conversion.fb_pixel_view_content":  "Website content views with shared items",
+    "app_custom_event.fb_mobile_content_view":   "In-app content views with shared items",
+    "offsite_conversion.fb_pixel_add_to_cart":   "Website adds to cart with shared items",
+    "app_custom_event.fb_mobile_add_to_cart":    "In-app adds to cart with shared items",
+    "offsite_conversion.fb_pixel_purchase":      "Website purchases with shared items",
+    "app_custom_event.fb_mobile_purchase":       "In-app purchases with shared items",
+}
+
+# CPAS conversion values come from catalog_segment_value
+CATALOG_VALUE_MAP = {
+    "omni_purchase":       "Purchases conversion value for shared items only",
+    "converted_promoted_product_omni_purchase": "Purchases conversion value for shared items only",
     "offsite_conversion.fb_pixel_add_to_cart":  "Website adds to cart conversion value for shared items only",
     "app_custom_event.fb_mobile_add_to_cart":   "In-app adds to cart conversion value for shared items only",
     "offsite_conversion.fb_pixel_purchase":     "Website purchases conversion value for shared items only",
     "app_custom_event.fb_mobile_purchase":      "In-app purchases conversion value for shared items only",
 }
 
-# ROAS columns come from purchase_roas action array
+# ROAS from purchase_roas field
 ROAS_MAP = {
-    "omni_purchase":                       "Purchase ROAS for shared items only",
-    "offsite_conversion.fb_pixel_purchase":"Website purchase ROAS for shared items only",
-    "app_custom_event.fb_mobile_purchase": "Mobile app purchase ROAS for shared items only",
+    "omni_purchase":                        "Purchase ROAS for shared items only",
+    "offsite_conversion.fb_pixel_purchase": "Website purchase ROAS for shared items only",
+    "app_custom_event.fb_mobile_purchase":  "Mobile app purchase ROAS for shared items only",
 }
 
 
@@ -278,15 +286,43 @@ def flatten_row(row: dict) -> dict:
         "Frequency":        float(row.get("frequency", 0) or 0),
         "Reporting starts": row.get("date_start", ""),
         "Reporting ends":   row.get("date_stop", ""),
-        "Day":              row.get("date_start", ""),   # daily breakdown → date_start = date_stop
+        "Day":              row.get("date_start", ""),
     }
 
-    # Zero-fill all action columns first
-    for col in list(ACTION_MAP.values()) + list(ACTION_VALUE_MAP.values()) + list(ROAS_MAP.values()):
+    # Zero-fill all columns
+    all_cols = (
+        list(ACTION_MAP.values()) +
+        list(CATALOG_ACTION_MAP.values()) +
+        list(CATALOG_VALUE_MAP.values()) +
+        list(ROAS_MAP.values())
+    )
+    for col in set(all_cols):
         flat[col] = 0.0
 
-    flat.update(_extract_actions(row, "actions",       ACTION_MAP))
-    flat.update(_extract_actions(row, "action_values", ACTION_VALUE_MAP))
+    # Standard actions (video, engagement, link clicks)
+    flat.update(_extract_actions(row, "actions", ACTION_MAP))
+
+    # CPAS conversions from catalog_segment_actions / catalog_segment_value
+    # Note: accumulate because multiple action_types can map to same column
+    for item in row.get("catalog_segment_actions", []):
+        action_type = item.get("action_type", "")
+        if action_type in CATALOG_ACTION_MAP:
+            col = CATALOG_ACTION_MAP[action_type]
+            try:
+                flat[col] = flat.get(col, 0.0) + float(item.get("value", 0))
+            except (ValueError, TypeError):
+                pass
+
+    for item in row.get("catalog_segment_value", []):
+        action_type = item.get("action_type", "")
+        if action_type in CATALOG_VALUE_MAP:
+            col = CATALOG_VALUE_MAP[action_type]
+            try:
+                flat[col] = flat.get(col, 0.0) + float(item.get("value", 0))
+            except (ValueError, TypeError):
+                pass
+
+    # ROAS from purchase_roas
     flat.update(_extract_actions(row, "purchase_roas", ROAS_MAP))
 
     return flat

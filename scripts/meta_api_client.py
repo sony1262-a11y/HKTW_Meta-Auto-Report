@@ -301,3 +301,151 @@ class MetaAPIClient:
             current_params = {}
 
         return all_rows
+
+    # ─────────────────────────────────────────
+    # Page Name lookup (for KOL report)
+    # ─────────────────────────────────────────
+
+    BATCH_SIZE = 50  # Meta Batch API limit
+
+    def get_page_names_for_ads(self, ad_ids: list[str]) -> dict[str, str]:
+        """
+        Given a list of ad IDs, return a mapping of ad_id → page_name.
+
+        Process:
+          1. Batch-query ad creatives to get page_id per ad
+          2. Batch-query page names from the page_ids
+          3. Join and return { ad_id: page_name }
+
+        In-memory cache within a single call — duplicate ad_ids are resolved once.
+        Returns "" for any ad whose page cannot be resolved.
+        """
+        unique_ids = list(set(str(i) for i in ad_ids if i))
+        if not unique_ids:
+            return {}
+
+        logger.info(f"[{self.market}] Resolving page names for {len(unique_ids)} unique ads...")
+
+        # Step 1: ad_id → page_id
+        ad_to_page = self._batch_get_page_ids(unique_ids)
+
+        # Step 2: page_id → page_name
+        unique_page_ids = list(set(v for v in ad_to_page.values() if v))
+        page_id_to_name = self._batch_get_page_names(unique_page_ids)
+
+        # Step 3: join
+        result = {}
+        for ad_id in unique_ids:
+            page_id   = ad_to_page.get(ad_id, "")
+            page_name = page_id_to_name.get(page_id, "") if page_id else ""
+            result[ad_id] = page_name
+
+        resolved = sum(1 for v in result.values() if v)
+        logger.info(f"[{self.market}] Page names resolved: {resolved}/{len(unique_ids)}")
+        return result
+
+    def _batch_get_page_ids(self, ad_ids: list[str]) -> dict[str, str]:
+        """
+        Batch query: ad_id → page_id via ad creative.
+        Returns { ad_id: page_id }
+        """
+        result = {}
+        batch_url = f"https://graph.facebook.com/{self.app_id or 'v21.0'}"
+        # Use the versioned base instead
+        base = META_API_BASE  # e.g. https://graph.facebook.com/v21.0
+
+        for i in range(0, len(ad_ids), self.BATCH_SIZE):
+            chunk = ad_ids[i:i + self.BATCH_SIZE]
+            batch = [
+                {
+                    "method":       "GET",
+                    "relative_url": f"{ad_id}?fields=creative{{object_story_spec{{page_id}}}}",
+                }
+                for ad_id in chunk
+            ]
+            try:
+                resp = requests.post(
+                    f"https://graph.facebook.com/",
+                    data={
+                        "access_token": self.access_token,
+                        "batch":        __import__("json").dumps(batch),
+                    },
+                    timeout=60,
+                )
+                resp.raise_for_status()
+                responses = resp.json()
+
+                for j, item in enumerate(responses):
+                    ad_id = chunk[j]
+                    if not item or item.get("code") != 200:
+                        result[ad_id] = ""
+                        continue
+                    try:
+                        body     = __import__("json").loads(item["body"])
+                        page_id  = (
+                            body.get("creative", {})
+                                .get("object_story_spec", {})
+                                .get("page_id", "")
+                        )
+                        result[ad_id] = str(page_id) if page_id else ""
+                    except Exception:
+                        result[ad_id] = ""
+
+                time.sleep(0.5)  # gentle throttle between batches
+
+            except Exception as e:
+                logger.warning(f"[{self.market}] Batch page_id lookup failed (chunk {i}): {e}")
+                for ad_id in chunk:
+                    result[ad_id] = ""
+
+        return result
+
+    def _batch_get_page_names(self, page_ids: list[str]) -> dict[str, str]:
+        """
+        Batch query: page_id → page_name.
+        Returns { page_id: page_name }
+        """
+        result = {}
+        if not page_ids:
+            return result
+
+        for i in range(0, len(page_ids), self.BATCH_SIZE):
+            chunk = page_ids[i:i + self.BATCH_SIZE]
+            batch = [
+                {
+                    "method":       "GET",
+                    "relative_url": f"{page_id}?fields=name",
+                }
+                for page_id in chunk
+            ]
+            try:
+                resp = requests.post(
+                    "https://graph.facebook.com/",
+                    data={
+                        "access_token": self.access_token,
+                        "batch":        __import__("json").dumps(batch),
+                    },
+                    timeout=60,
+                )
+                resp.raise_for_status()
+                responses = resp.json()
+
+                for j, item in enumerate(responses):
+                    page_id = chunk[j]
+                    if not item or item.get("code") != 200:
+                        result[page_id] = ""
+                        continue
+                    try:
+                        body = __import__("json").loads(item["body"])
+                        result[page_id] = body.get("name", "")
+                    except Exception:
+                        result[page_id] = ""
+
+                time.sleep(0.5)
+
+            except Exception as e:
+                logger.warning(f"[{self.market}] Batch page_name lookup failed (chunk {i}): {e}")
+                for page_id in chunk:
+                    result[page_id] = ""
+
+        return result

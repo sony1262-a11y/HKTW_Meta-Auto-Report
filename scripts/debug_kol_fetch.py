@@ -122,9 +122,18 @@ def debug_fetch_market(
     df_raw = pd.DataFrame(all_raw_rows)
     save_excel(df_raw, f"KOL_raw_{market}_{date_start}_{date_stop}.xlsx", "Raw API Response")
 
+    # Page name lookup
+    page_name_map: dict[str, str] = {}
+    try:
+        unique_ad_ids = list({str(r.get("ad_id", "")) for r in all_full_rows if r.get("ad_id")})
+        page_name_map = client.get_page_names_for_ads(unique_ad_ids)
+        logger.info(f"[{market}] Page names resolved: {sum(1 for v in page_name_map.values() if v)}/{len(unique_ad_ids)}")
+    except Exception as e:
+        logger.warning(f"[{market}] Page name lookup failed — Page Name will be blank: {e}")
+
     # Save transformed
     try:
-        df_t = transform(all_full_rows, fx_rates=fx_rates)
+        df_t = transform(all_full_rows, fx_rates=fx_rates, page_name_map=page_name_map)
         summary["transformed_rows"] = len(df_t)
         save_excel(df_t, f"KOL_transformed_{market}_{date_start}_{date_stop}.xlsx", "Transformed")
     except Exception as e:
@@ -159,9 +168,23 @@ def main():
     logger.info("=" * 60)
 
     all_summaries = []
+    all_transformed = []
     for m in markets_to_run:
         s = debug_fetch_market(m, date_start, date_stop, fx_rates, pa)
         all_summaries.append(s)
+        t_file = os.path.join(OUTPUT_DIR, f"KOL_transformed_{m}_{date_start}_{date_stop}.xlsx")
+        if os.path.exists(t_file):
+            try:
+                df_t = pd.read_excel(t_file)
+                all_transformed.append(df_t)
+            except Exception:
+                pass
+
+    # ── Save merged HKTW transformed file ─────────────────────────────────────
+    if all_transformed:
+        df_merged = pd.concat(all_transformed, ignore_index=True)
+        save_excel(df_merged, f"KOL_transformed_HKTW_{date_start}_{date_stop}.xlsx", "KOL Data")
+        logger.info(f"Merged HKTW file saved: {len(df_merged)} rows")
 
     run_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     lines = [
