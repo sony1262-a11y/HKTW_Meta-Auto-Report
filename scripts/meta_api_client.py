@@ -388,9 +388,16 @@ class MetaAPIClient:
                 resp.raise_for_status()
                 responses = resp.json()
 
+                page_ids_found = 0
                 for j, item in enumerate(responses):
                     ad_id = chunk[j]
                     if not item or item.get("code") != 200:
+                        # Log first failure in each chunk for diagnosis
+                        if j == 0 and i == 0:
+                            logger.warning(
+                                f"[{self.market}] creative API response code={item.get('code') if item else 'None'} "
+                                f"body={str(item.get('body', ''))[:300] if item else 'None'}"
+                            )
                         result[ad_id] = ""
                         continue
                     try:
@@ -400,10 +407,17 @@ class MetaAPIClient:
                                 .get("object_story_spec", {})
                                 .get("page_id", "")
                         )
+                        # Log first response body for diagnosis (first chunk only)
+                        if j == 0 and i == 0:
+                            logger.info(f"[{self.market}] creative API sample body: {str(body)[:300]}")
                         result[ad_id] = str(page_id) if page_id else ""
-                    except Exception:
+                        if page_id:
+                            page_ids_found += 1
+                    except Exception as e:
                         result[ad_id] = ""
 
+                if i == 0:
+                    logger.info(f"[{self.market}] creative API chunk 0: {page_ids_found}/{len(chunk)} page_ids found")
                 time.sleep(0.5)
 
             except Exception as e:
@@ -411,6 +425,8 @@ class MetaAPIClient:
                 for ad_id in chunk:
                     result[ad_id] = ""
 
+        page_ids_total = sum(1 for v in result.values() if v)
+        logger.info(f"[{self.market}] _batch_get_page_ids: {page_ids_total}/{len(ad_ids)} page_ids resolved")
         return result
 
     def _batch_get_page_names(self, page_ids: list[str]) -> dict[str, str]:
@@ -420,7 +436,10 @@ class MetaAPIClient:
         """
         result = {}
         if not page_ids:
+            logger.info(f"[{self.market}] _batch_get_page_names: no page_ids to query")
             return result
+
+        logger.info(f"[{self.market}] _batch_get_page_names: querying {len(page_ids)} page_ids")
 
         for i in range(0, len(page_ids), self.BATCH_SIZE):
             chunk = page_ids[i:i + self.BATCH_SIZE]
@@ -446,10 +465,17 @@ class MetaAPIClient:
                 for j, item in enumerate(responses):
                     page_id = chunk[j]
                     if not item or item.get("code") != 200:
+                        if j == 0 and i == 0:
+                            logger.warning(
+                                f"[{self.market}] page name API response code={item.get('code') if item else 'None'} "
+                                f"body={str(item.get('body', ''))[:300] if item else 'None'}"
+                            )
                         result[page_id] = ""
                         continue
                     try:
                         body = json.loads(item["body"])
+                        if j == 0 and i == 0:
+                            logger.info(f"[{self.market}] page name API sample body: {str(body)[:200]}")
                         result[page_id] = body.get("name", "")
                     except Exception:
                         result[page_id] = ""
@@ -461,4 +487,6 @@ class MetaAPIClient:
                 for page_id in chunk:
                     result[page_id] = ""
 
+        names_found = sum(1 for v in result.values() if v)
+        logger.info(f"[{self.market}] _batch_get_page_names: {names_found}/{len(page_ids)} names resolved")
         return result
