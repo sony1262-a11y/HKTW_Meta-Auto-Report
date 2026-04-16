@@ -378,7 +378,7 @@ class MetaAPIClient:
             ]
             try:
                 resp = requests.post(
-                    "https://graph.facebook.com/",
+                    f"{META_API_BASE}/",
                     data={
                         "access_token": self.access_token,
                         "batch":        json.dumps(batch),
@@ -452,7 +452,7 @@ class MetaAPIClient:
             ]
             try:
                 resp = requests.post(
-                    "https://graph.facebook.com/",
+                    f"{META_API_BASE}/",
                     data={
                         "access_token": self.access_token,
                         "batch":        json.dumps(batch),
