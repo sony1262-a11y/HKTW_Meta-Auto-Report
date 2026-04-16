@@ -1,0 +1,54 @@
+name: Fetch CPAS Report
+
+on:
+  workflow_dispatch:
+    inputs:
+      market:
+        description: 'Market to fetch (HK / TW / ALL)'
+        required: true
+        default: 'ALL'
+        type: choice
+        options:
+          - ALL
+          - HK
+          - TW
+      date_start:
+        description: 'Start date (YYYY-MM-DD)'
+        required: true
+        type: string
+      date_stop:
+        description: 'End date (YYYY-MM-DD)'
+        required: true
+        type: string
+
+jobs:
+  fetch-cpas:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests pandas openpyxl
+
+      - name: Fetch CPAS data
+        env:
+          META_HK_APP_ID:       ${{ secrets.META_HK_APP_ID }}
+          META_HK_APP_SECRET:   ${{ secrets.META_HK_APP_SECRET }}
+          META_HK_ACCESS_TOKEN: ${{ secrets.META_HK_ACCESS_TOKEN }}
+          META_TW_APP_ID:       ${{ secrets.META_TW_APP_ID }}
+          META_TW_APP_SECRET:   ${{ secrets.META_TW_APP_SECRET }}
+          META_TW_ACCESS_TOKEN: ${{ secrets.META_TW_ACCESS_TOKEN }}
+          PA_UPLOAD_URL:        ${{ secrets.PA_UPLOAD_URL }}
+          PA_DOWNLOAD_URL:      ${{ secrets.PA_DOWNLOAD_URL }}
+          MARKET:               ${{ github.event.inputs.market }}
+          DATE_START:           ${{ github.event.inputs.date_start }}
+          DATE_STOP:            ${{ github.event.inputs.date_stop }}
+        run: python scripts/cpas_report.py

@@ -1,0 +1,74 @@
+name: "[DEBUG] KOL Fetch & Inspect"
+
+on:
+  workflow_dispatch:
+    inputs:
+      market:
+        description: 'Market'
+        required: true
+        default: 'ALL'
+        type: choice
+        options:
+          - ALL
+          - HK
+          - TW
+      date_start:
+        description: 'Start date (YYYY-MM-DD)'
+        required: true
+        type: string
+      date_stop:
+        description: 'End date (YYYY-MM-DD)'
+        required: true
+        type: string
+      upload_to_sharepoint:
+        description: 'Upload result to SharePoint?'
+        required: true
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+jobs:
+  debug-kol:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests pandas openpyxl
+
+      - name: Fetch & transform KOL data
+        env:
+          META_HK_APP_ID:       ${{ secrets.META_HK_APP_ID }}
+          META_HK_APP_SECRET:   ${{ secrets.META_HK_APP_SECRET }}
+          META_HK_ACCESS_TOKEN: ${{ secrets.META_HK_ACCESS_TOKEN }}
+          META_TW_APP_ID:       ${{ secrets.META_TW_APP_ID }}
+          META_TW_APP_SECRET:   ${{ secrets.META_TW_APP_SECRET }}
+          META_TW_ACCESS_TOKEN: ${{ secrets.META_TW_ACCESS_TOKEN }}
+          PA_UPLOAD_URL:        ${{ secrets.PA_UPLOAD_URL }}
+          PA_DOWNLOAD_URL:      ${{ secrets.PA_DOWNLOAD_URL }}
+          MARKET:               ${{ github.event.inputs.market }}
+          DATE_START:           ${{ github.event.inputs.date_start }}
+          DATE_STOP:            ${{ github.event.inputs.date_stop }}
+          UPLOAD_TO_SHAREPOINT: ${{ github.event.inputs.upload_to_sharepoint }}
+          OUTPUT_DIR:           'debug_output'
+        run: |
+          mkdir -p debug_output
+          python scripts/debug_kol_fetch.py
+
+      - name: Upload result as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kol-debug-${{ github.event.inputs.market }}-${{ github.event.inputs.date_start }}-${{ github.event.inputs.date_stop }}
+          path: debug_output/
+          retention-days: 7
