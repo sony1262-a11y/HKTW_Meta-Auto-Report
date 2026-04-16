@@ -309,16 +309,15 @@ class MetaAPIClient:
 
     BATCH_SIZE = 50  # Meta Batch API limit
 
-    def get_page_names_for_ads(self, ad_ids: list[str]) -> dict[str, str]:
+    def get_page_names_for_ads(self, ad_ids: list[str], story_id_map: dict[str, str] | None = None) -> dict[str, str]:
         """
         Given a list of ad IDs, return a mapping of ad_id → page_name.
 
-        Process:
-          1. Batch-query ad creatives to get page_id per ad
-          2. Batch-query page names from the page_ids
-          3. Join and return { ad_id: page_name }
+        Primary:  extract page_id from effective_object_story_id ("{page_id}_{post_id}")
+                  passed in via story_id_map — no extra API call needed.
+        Fallback: batch-query ad creatives to get page_id (for ads without story_id).
+        Then:     batch-query page names from page_ids.
 
-        In-memory cache within a single call — duplicate ad_ids are resolved once.
         Returns "" for any ad whose page cannot be resolved.
         """
         unique_ids = list(set(str(i) for i in ad_ids if i))
@@ -328,7 +327,23 @@ class MetaAPIClient:
         logger.info(f"[{self.market}] Resolving page names for {len(unique_ids)} unique ads...")
 
         # Step 1: ad_id → page_id
-        ad_to_page = self._batch_get_page_ids(unique_ids)
+        ad_to_page: dict[str, str] = {}
+
+        # Primary: extract from effective_object_story_id
+        if story_id_map:
+            for ad_id in unique_ids:
+                story_id = story_id_map.get(ad_id, "")
+                if story_id and "_" in str(story_id):
+                    page_id = str(story_id).split("_")[0]
+                    if page_id.isdigit():
+                        ad_to_page[ad_id] = page_id
+
+        # Fallback: creative API for ads still missing page_id
+        missing = [ad_id for ad_id in unique_ids if ad_id not in ad_to_page]
+        if missing:
+            logger.info(f"[{self.market}] Falling back to creative API for {len(missing)} ads...")
+            fallback = self._batch_get_page_ids(missing)
+            ad_to_page.update(fallback)
 
         # Step 2: page_id → page_name
         unique_page_ids = list(set(v for v in ad_to_page.values() if v))
