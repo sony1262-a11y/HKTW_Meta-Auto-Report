@@ -88,21 +88,29 @@ class MetaAPIClient:
         return new_token
 
     # ─────────────────────────────────────────
-    # Ad Account discovery
+    # Ad Account info
     # ─────────────────────────────────────────
 
-    def get_ad_accounts(self) -> list[dict]:
+    def get_account_info(self, ad_account_id: str) -> dict:
         """
-        Return all ad accounts accessible under this token.
-        Each item: {"id": "act_xxx", "name": "...", "account_status": ...}
+        Fetch basic info for a single ad account by ID.
+        Used to verify account is accessible with current token.
+        System User Tokens cannot use /me/adaccounts — must specify account ID directly.
+
+        Returns dict with id, name, account_status, currency.
+        Returns {} on error.
         """
-        url = f"{META_API_BASE}/me/adaccounts"
+        url = f"{META_API_BASE}/{ad_account_id}"
         params = {
             "fields":       "id,name,account_status,currency",
             "access_token": self.access_token,
-            "limit":        200,
         }
-        return self._paginate(url, params)
+        try:
+            result = self._get(url, params)
+            return result
+        except Exception as e:
+            logger.warning(f"[{self.market}] Could not fetch info for {ad_account_id}: {e}")
+            return {}
 
     # ─────────────────────────────────────────
     # Insights (core data fetch)

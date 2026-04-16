@@ -21,6 +21,9 @@ from scripts.kol_transformer import (
     get_creative_format,
     map_objective,
     get_category_type_and_category,
+    get_kol_name_from_tag,
+    get_content_type,
+    get_objective_kol,
 )
 import pandas as pd
 
@@ -176,6 +179,50 @@ def run_all():
         test("OralB",           get_category_type_and_category("OralB"),           ("Brand", "Oral Care")),
         test("First Aid Beauty",get_category_type_and_category("First Aid Beauty"),("",      "Skin Care")),
         test("unknown brand",   get_category_type_and_category("Unknown"),         ("",      "")),
+    ]
+
+    print("\n── Content Type ────────────────────────────────────")
+    results += [
+        # KOL Boosting: account contains KOL
+        test("KOL account → KOL Boosting",
+             get_content_type("EC Ariel TW KOL CY~TWD", CREATIVE_TAG),
+             "KOL Boosting"),
+        # Buyout: non-KOL account, KOL name present after #
+        test("non-KOL + KOL name → Buyout",
+             get_content_type("EC Ariel TW Brand CY~TWD", "CLTPR#Chung-Chungalwayson-MO-0611-display"),
+             "Buyout"),
+        # Empty: non-KOL account, no KOL name (# followed by -)
+        test("non-KOL + no KOL name → empty",
+             get_content_type("EC Ariel TW Brand CY~TWD", "CLTPR#-WATRdpKylie-WA-0409-display"),
+             ""),
+        # Empty: non-KOL, no creative tag
+        test("non-KOL + no tag → empty",
+             get_content_type("EC Ariel TW Brand CY~TWD", ""),
+             ""),
+    ]
+
+    print("\n── KOL name from tag ───────────────────────────────")
+    results += [
+        test("has KOL name",    get_kol_name_from_tag("CLTPR#Chung-Chungalwayson-MO-0611-display"), "Chung"),
+        test("empty KOL name",  get_kol_name_from_tag("CLTPR#-WATRdpKylie-WA-0409-display"), ""),
+        test("no # → empty",    get_kol_name_from_tag("CLTPR-display"), ""),
+        test("None → empty",    get_kol_name_from_tag(None), ""),
+    ]
+
+    print("\n── Objective KOL (with CPAS override) ─────────────")
+    results += [
+        test("CPAS account → PRODUCT_CATALOG_SALES",
+             get_objective_kol("CW-LC", "EC Whisper HKTVMall CPAS HKD"),
+             "PRODUCT_CATALOG_SALES"),
+        test("non-CPAS account → mapped OB",
+             get_objective_kol("CW-LC", "EC Ariel TW KOL CY~TWD"),
+             "Traffic"),
+        test("non-CPAS unknown OB → passthrough",
+             get_objective_kol("XY-ZZ", "EC Ariel TW Brand CY~TWD"),
+             "XY-ZZ"),
+        test("CPAS account overrides even known OB",
+             get_objective_kol("BA-RH", "EC Whisper CPAS TWD"),
+             "PRODUCT_CATALOG_SALES"),
     ]
 
     passed = sum(results)

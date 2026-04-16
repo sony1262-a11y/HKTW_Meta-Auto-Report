@@ -19,11 +19,12 @@ from config.settings import MARKETS
 from scripts.meta_api_client import MetaAPIClient
 from scripts.kol_transformer import transform, OUTPUT_COLUMNS
 from scripts.kol_report import (
-    KOL_KEYWORD, INSIGHT_FIELDS, BREAKDOWNS,
+    INSIGHT_FIELDS, BREAKDOWNS,
     SP_FOLDER, OUTPUT_FILE, SHEET_NAME,
     load_fx_rates, load_existing, merge_and_deduplicate, save_to_excel,
 )
 from scripts.power_automate_client import PowerAutomateClient
+from scripts.account_loader import load_accounts
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,38 +53,42 @@ def debug_fetch_market(
     date_start: str,
     date_stop: str,
     fx_rates: dict,
+    pa: PowerAutomateClient,
 ) -> dict:
     summary = {
-        "market":            market,
-        "accounts":          [],
-        "raw_rows":          0,
-        "transformed_rows":  0,
-        "errors":            [],
+        "market":           market,
+        "accounts":         [],
+        "raw_rows":         0,
+        "transformed_rows": 0,
+        "errors":           [],
     }
 
-    try:
-        client   = MetaAPIClient(market)
-        accounts = client.get_ad_accounts()
-    except Exception as e:
-        summary["errors"].append(f"[{market}] get_ad_accounts failed: {e}")
+    accounts = load_accounts(market, pa, report_type=None)  # all types: Brand, EC, CPAS, KOL
+    summary["accounts"] = [{"id": a["id"], "name": a["name"]} for a in accounts]
+
+    logger.info(f"[{market}] KOL accounts loaded from Control Panel: {len(accounts)}")
+    for a in accounts:
+        logger.info(f"  {a['id']} | {a['name']}")
+
+    if not accounts:
+        summary["errors"].append(
+            f"[{market}] No KOL accounts found in Control Panel. "
+            "Check HK_Ad_Accounts.xlsx / TW_Ad_Accounts.xlsx on SharePoint."
+        )
         return summary
 
-    kol_accounts = [a for a in accounts if KOL_KEYWORD in a.get("name", "")]
-    summary["accounts"] = [
-        {"id": a["id"], "name": a.get("name", ""), "status": a.get("account_status")}
-        for a in kol_accounts
-    ]
-
-    logger.info(f"[{market}] {len(kol_accounts)} KOL accounts:")
-    for a in kol_accounts:
-        logger.info(f"  {a['id']} | {a.get('name','')}")
+    try:
+        client = MetaAPIClient(market)
+    except Exception as e:
+        summary["errors"].append(f"[{market}] MetaAPIClient init failed: {e}")
+        return summary
 
     all_raw_rows  = []
     all_full_rows = []
 
-    for acct in kol_accounts:
+    for acct in accounts:
         acct_id   = acct["id"]
-        acct_name = acct.get("name", acct_id)
+        acct_name = acct["name"]
         try:
             rows = client.get_insights(
                 ad_account_id = acct_id,
@@ -155,7 +160,7 @@ def main():
 
     all_summaries = []
     for m in markets_to_run:
-        s = debug_fetch_market(m, date_start, date_stop, fx_rates)
+        s = debug_fetch_market(m, date_start, date_stop, fx_rates, pa)
         all_summaries.append(s)
 
     run_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")

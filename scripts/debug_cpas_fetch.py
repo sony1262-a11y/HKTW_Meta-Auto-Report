@@ -20,8 +20,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config.settings import MARKETS
 from scripts.meta_api_client import MetaAPIClient
 from scripts.cpas_transformer import transform, flatten_row, OUTPUT_COLUMNS
-from scripts.cpas_report import CPAS_KEYWORD, INSIGHT_FIELDS, SP_FOLDER, OUTPUT_FILE, SHEET_NAME
+from scripts.cpas_report import INSIGHT_FIELDS, SP_FOLDER, OUTPUT_FILE, SHEET_NAME
 from scripts.power_automate_client import PowerAutomateClient
+from scripts.account_loader import load_accounts
 
 logging.basicConfig(
     level=logging.INFO,
@@ -54,45 +55,49 @@ def append_summary(lines: list[str]):
 # Per-market debug fetch
 # ─────────────────────────────────────────────────────────────────────────────
 
-def debug_fetch_market(market: str, date_start: str, date_stop: str) -> dict:
+def debug_fetch_market(market: str, date_start: str, date_stop: str, pa: PowerAutomateClient) -> dict:
     """
     Fetch + transform for one market.
     Returns a summary dict.
     """
     summary = {
-        "market":      market,
-        "accounts":    [],
-        "raw_rows":    0,
+        "market":           market,
+        "accounts":         [],
+        "raw_rows":         0,
         "transformed_rows": 0,
-        "errors":      [],
+        "errors":           [],
     }
 
-    try:
-        client   = MetaAPIClient(market)
-        accounts = client.get_ad_accounts()
-    except Exception as e:
-        msg = f"[{market}] Failed to get ad accounts: {e}"
-        logger.error(msg)
-        summary["errors"].append(msg)
-        return summary
-
-    cpas_accounts = [a for a in accounts if CPAS_KEYWORD in a.get("name", "")]
+    accounts = load_accounts(market, pa, report_type="CPAS")
 
     summary["accounts"] = [
-        {"id": a["id"], "name": a.get("name", ""), "status": a.get("account_status")}
-        for a in cpas_accounts
+        {"id": a["id"], "name": a["name"], "status": "enabled"}
+        for a in accounts
     ]
 
-    logger.info(f"[{market}] {len(cpas_accounts)} CPAS accounts found:")
-    for a in cpas_accounts:
-        logger.info(f"  {a['id']} | {a.get('name','')}")
+    logger.info(f"[{market}] CPAS accounts loaded from Control Panel: {len(accounts)}")
+    for a in accounts:
+        logger.info(f"  {a['id']} | {a['name']}")
 
-    all_raw_rows   = []
-    all_flat_rows  = []
+    if not accounts:
+        summary["errors"].append(
+            f"[{market}] No CPAS accounts found in Control Panel. "
+            "Check HK_Ad_Accounts.xlsx / TW_Ad_Accounts.xlsx on SharePoint."
+        )
+        return summary
 
-    for acct in cpas_accounts:
+    try:
+        client = MetaAPIClient(market)
+    except Exception as e:
+        summary["errors"].append(f"[{market}] MetaAPIClient init failed: {e}")
+        return summary
+
+    all_raw_rows  = []
+    all_flat_rows = []
+
+    for acct in accounts:
         acct_id   = acct["id"]
-        acct_name = acct.get("name", acct_id)
+        acct_name = acct["name"]
         try:
             rows = client.get_insights(
                 ad_account_id = acct_id,
@@ -118,8 +123,6 @@ def debug_fetch_market(market: str, date_start: str, date_stop: str) -> dict:
             msg = f"[{market}] Error fetching {acct_id} ({acct_name}): {e}"
             logger.error(msg)
             summary["errors"].append(msg)
-
-    summary["raw_rows"] = len(all_raw_rows)
 
     if not all_raw_rows:
         logger.warning(f"[{market}] No rows fetched")
@@ -196,8 +199,9 @@ def main():
     logger.info("=" * 60)
 
     all_summaries = []
+    pa = PowerAutomateClient()
     for m in markets_to_run:
-        s = debug_fetch_market(m, date_start, date_stop)
+        s = debug_fetch_market(m, date_start, date_stop, pa)
         all_summaries.append(s)
 
     # ── Write summary txt ─────────────────────────────────────────────────────
@@ -214,13 +218,13 @@ def main():
         lines += [
             "",
             f"── {s['market']} ──────────────────────────────────",
-            f"CPAS Accounts found: {len(s['accounts'])}",
+            f"CPAS accounts in Control Panel: {len(s['accounts'])}",
         ]
         for a in s["accounts"]:
-            lines.append(f"  {a['id']} | {a['name']} | status={a['status']}")
+            lines.append(f"  {a['id']} | {a['name']}")
         lines += [
-            f"Raw rows fetched:    {s['raw_rows']}",
-            f"Transformed rows:    {s['transformed_rows']}",
+            f"Raw rows fetched:      {s['raw_rows']}",
+            f"Transformed rows:      {s['transformed_rows']}",
         ]
         if s["errors"]:
             lines.append("ERRORS:")

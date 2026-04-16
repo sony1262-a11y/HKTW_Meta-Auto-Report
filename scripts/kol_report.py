@@ -20,6 +20,7 @@ from config.settings import SP_PATHS, MARKETS
 from scripts.meta_api_client import MetaAPIClient
 from scripts.kol_transformer import transform, OUTPUT_COLUMNS
 from scripts.power_automate_client import PowerAutomateClient
+from scripts.account_loader import load_accounts
 
 logging.basicConfig(
     level=logging.INFO,
@@ -72,15 +73,23 @@ def load_fx_rates(pa: PowerAutomateClient) -> dict[str, float]:
 
     Amount Spent (USD) = Amount Spent (local currency) ÷ FX Rate
     Returns dict: { "HK": 7.78, "TW": 32.5 }
-    Returns empty dict on failure (Amount Spent local currency will be left blank).
+    Returns empty dict on any failure — Amount Spent (USD) will be blank but script continues.
     """
     logger.info(f"Loading FX rates from SharePoint: {FX_FILE}")
-    data = pa.download_bytes(FX_SP_FOLDER, FX_FILE)
+
+    try:
+        data = pa.download_bytes(FX_SP_FOLDER, FX_FILE)
+    except EnvironmentError as e:
+        logger.warning(f"PA_DOWNLOAD_URL not set — skipping FX rates. Amount Spent (USD) will be blank. ({e})")
+        return {}
+    except Exception as e:
+        logger.warning(f"Failed to download FX file — skipping. Amount Spent (USD) will be blank. ({e})")
+        return {}
 
     if data is None:
         logger.warning(
-            f"FX rate file not found: {FX_SP_FOLDER}/{FX_FILE}. "
-            "Amount Spent (local currency) will be blank."
+            f"FX rate file not found on SharePoint: {FX_SP_FOLDER}/{FX_FILE}. "
+            "Amount Spent (USD) will be blank."
         )
         return {}
 
@@ -120,27 +129,23 @@ def fetch_market(
     date_start: str,
     date_stop: str,
     fx_rates: dict[str, float],
+    pa: PowerAutomateClient | None = None,
 ) -> pd.DataFrame:
     """Fetch all KOL ad accounts for one market and return transformed DataFrame."""
     logger.info(f"[{market}] Fetching KOL data {date_start} → {date_stop}")
 
-    client   = MetaAPIClient(market)
-    accounts = client.get_ad_accounts()
+    accounts = load_accounts(market, pa, report_type=None)  # all types: Brand, EC, CPAS, KOL
 
-    kol_accounts = [a for a in accounts if KOL_KEYWORD in a.get("name", "")]
-    logger.info(
-        f"[{market}] Found {len(kol_accounts)} KOL accounts "
-        f"(out of {len(accounts)} total)"
-    )
-
-    if not kol_accounts:
-        logger.warning(f"[{market}] No KOL accounts found — skipping")
+    if not accounts:
+        logger.warning(f"[{market}] No KOL accounts found in Control Panel — skipping")
         return pd.DataFrame(columns=OUTPUT_COLUMNS)
 
+    client   = MetaAPIClient(market)
     all_rows = []
-    for acct in kol_accounts:
+
+    for acct in accounts:
         acct_id   = acct["id"]
-        acct_name = acct.get("name", acct_id)
+        acct_name = acct["name"]
         logger.info(f"[{market}]   → {acct_name} ({acct_id})")
 
         try:
@@ -232,7 +237,7 @@ def main():
 
     new_frames = []
     for m in markets_to_run:
-        df_m = fetch_market(m, date_start, date_stop, fx_rates)
+        df_m = fetch_market(m, date_start, date_stop, fx_rates, pa)
         if not df_m.empty:
             new_frames.append(df_m)
 

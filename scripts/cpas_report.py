@@ -20,6 +20,7 @@ from config.settings import SP_PATHS, SP_CONTROL_FILES, MARKETS
 from scripts.meta_api_client import MetaAPIClient
 from scripts.cpas_transformer import transform, OUTPUT_COLUMNS
 from scripts.power_automate_client import PowerAutomateClient
+from scripts.account_loader import load_accounts
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,25 +53,22 @@ INSIGHT_FIELDS = [
 # Per-market fetch
 # ─────────────────────────────────────────────────────────────────────────────
 
-def fetch_market(market: str, date_start: str, date_stop: str) -> pd.DataFrame:
+def fetch_market(market: str, date_start: str, date_stop: str, pa: PowerAutomateClient) -> pd.DataFrame:
     """Fetch all CPAS ad accounts for one market and return transformed DataFrame."""
     logger.info(f"[{market}] Fetching CPAS data {date_start} → {date_stop}")
 
-    client   = MetaAPIClient(market)
-    accounts = client.get_ad_accounts()
+    accounts = load_accounts(market, pa, report_type="CPAS")
 
-    cpas_accounts = [a for a in accounts if CPAS_KEYWORD in a.get("name", "")]
-    logger.info(f"[{market}] Found {len(cpas_accounts)} CPAS accounts "
-                f"(out of {len(accounts)} total)")
-
-    if not cpas_accounts:
-        logger.warning(f"[{market}] No CPAS accounts found — skipping")
+    if not accounts:
+        logger.warning(f"[{market}] No CPAS accounts found in Control Panel — skipping")
         return pd.DataFrame(columns=OUTPUT_COLUMNS)
 
+    client   = MetaAPIClient(market)
     all_rows = []
-    for acct in cpas_accounts:
+
+    for acct in accounts:
         acct_id   = acct["id"]
-        acct_name = acct.get("name", acct_id)
+        acct_name = acct["name"]
         logger.info(f"[{market}]   → {acct_name} ({acct_id})")
 
         try:
@@ -168,10 +166,12 @@ def main():
 
     logger.info(f"CPAS Report | Markets: {markets_to_run} | {date_start} → {date_stop}")
 
+    pa = PowerAutomateClient()
+
     # Fetch new data from all target markets
     new_frames = []
     for m in markets_to_run:
-        df_m = fetch_market(m, date_start, date_stop)
+        df_m = fetch_market(m, date_start, date_stop, pa)
         if not df_m.empty:
             new_frames.append(df_m)
 
@@ -179,7 +179,6 @@ def main():
     logger.info(f"Total new rows fetched: {len(new_data)}")
 
     # Accumulate with existing SharePoint data
-    pa = PowerAutomateClient()
     existing = load_existing(pa)
     merged   = merge_and_deduplicate(existing, new_data)
 
