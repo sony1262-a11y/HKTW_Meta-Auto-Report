@@ -126,10 +126,14 @@ def debug_fetch_market(
     page_name_map: dict[str, str] = {}
     try:
         unique_ad_ids = list({str(r.get("ad_id", "")) for r in all_full_rows if r.get("ad_id")})
+        logger.info(f"[{market}] Starting page name lookup for {len(unique_ad_ids)} unique ads...")
         page_name_map = client.get_page_names_for_ads(unique_ad_ids)
-        logger.info(f"[{market}] Page names resolved: {sum(1 for v in page_name_map.values() if v)}/{len(unique_ad_ids)}")
+        resolved = sum(1 for v in page_name_map.values() if v)
+        logger.info(f"[{market}] Page names resolved: {resolved}/{len(unique_ad_ids)}")
     except Exception as e:
+        import traceback
         logger.warning(f"[{market}] Page name lookup failed — Page Name will be blank: {e}")
+        logger.warning(traceback.format_exc())
 
     # Save transformed
     try:

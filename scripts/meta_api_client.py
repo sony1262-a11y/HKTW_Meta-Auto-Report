@@ -3,6 +3,7 @@ HKTW Meta Auto Report - Meta Graph API Client
 Supports HK and TW markets with independent App credentials and tokens.
 """
 import os
+import json
 import time
 import logging
 import requests
@@ -350,9 +351,6 @@ class MetaAPIClient:
         Returns { ad_id: page_id }
         """
         result = {}
-        batch_url = f"https://graph.facebook.com/{self.app_id or 'v21.0'}"
-        # Use the versioned base instead
-        base = META_API_BASE  # e.g. https://graph.facebook.com/v21.0
 
         for i in range(0, len(ad_ids), self.BATCH_SIZE):
             chunk = ad_ids[i:i + self.BATCH_SIZE]
@@ -365,10 +363,10 @@ class MetaAPIClient:
             ]
             try:
                 resp = requests.post(
-                    f"https://graph.facebook.com/",
+                    "https://graph.facebook.com/",
                     data={
                         "access_token": self.access_token,
-                        "batch":        __import__("json").dumps(batch),
+                        "batch":        json.dumps(batch),
                     },
                     timeout=60,
                 )
@@ -381,8 +379,8 @@ class MetaAPIClient:
                         result[ad_id] = ""
                         continue
                     try:
-                        body     = __import__("json").loads(item["body"])
-                        page_id  = (
+                        body    = json.loads(item["body"])
+                        page_id = (
                             body.get("creative", {})
                                 .get("object_story_spec", {})
                                 .get("page_id", "")
@@ -391,7 +389,7 @@ class MetaAPIClient:
                     except Exception:
                         result[ad_id] = ""
 
-                time.sleep(0.5)  # gentle throttle between batches
+                time.sleep(0.5)
 
             except Exception as e:
                 logger.warning(f"[{self.market}] Batch page_id lookup failed (chunk {i}): {e}")
@@ -423,7 +421,7 @@ class MetaAPIClient:
                     "https://graph.facebook.com/",
                     data={
                         "access_token": self.access_token,
-                        "batch":        __import__("json").dumps(batch),
+                        "batch":        json.dumps(batch),
                     },
                     timeout=60,
                 )
@@ -436,7 +434,7 @@ class MetaAPIClient:
                         result[page_id] = ""
                         continue
                     try:
-                        body = __import__("json").loads(item["body"])
+                        body = json.loads(item["body"])
                         result[page_id] = body.get("name", "")
                     except Exception:
                         result[page_id] = ""
