@@ -263,12 +263,19 @@ class MetaAPIClient:
                 except Exception:
                     pass
                 error_code = body.get("error", {}).get("code")
+                error_msg  = body.get("error", {}).get("message", "")
+                error_type = body.get("error", {}).get("type", "")
+                # Log full Meta error for diagnosis
+                logger.error(
+                    f"[{self.market}] Meta API error — "
+                    f"HTTP {resp.status_code} | code={error_code} | "
+                    f"type={error_type} | message={error_msg}"
+                )
                 # Throttling / transient errors — retry
                 if error_code in (4, 17, 32, 613) or resp.status_code in (429, 500, 503):
                     wait = self.RETRY_DELAY * attempt
                     logger.warning(
-                        f"[{self.market}] API error {error_code} on attempt {attempt}, "
-                        f"retrying in {wait}s..."
+                        f"[{self.market}] Retrying in {wait}s (attempt {attempt}/{self.MAX_RETRIES})..."
                     )
                     time.sleep(wait)
                 else:

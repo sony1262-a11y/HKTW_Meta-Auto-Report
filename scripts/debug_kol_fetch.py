@@ -177,7 +177,7 @@ def main():
         lines += ["", f"── {s['market']} ──────────────────────────────────",
                   f"KOL Accounts found: {len(s['accounts'])}"]
         for a in s["accounts"]:
-            lines.append(f"  {a['id']} | {a['name']} | status={a['status']}")
+            lines.append(f"  {a['id']} | {a['name']}")
         lines += [
             f"Raw rows fetched:   {s['raw_rows']}",
             f"Transformed rows:   {s['transformed_rows']}",
