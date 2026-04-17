@@ -60,7 +60,7 @@ def debug_fetch_market(
         "errors":           [],
     }
 
-    breakdowns = BREAKDOWN_MAP.get(breakdown, BREAKDOWN_MAP["platform_placement"])
+    breakdowns = BREAKDOWN_MAP.get(breakdown) or None
     accounts   = load_accounts(market, pa, report_type=None)
     summary["accounts"] = [{"id": a["id"], "name": a["name"]} for a in accounts]
 
@@ -194,7 +194,7 @@ def main():
 
     if time_increment not in ("1", "monthly"):
         time_increment = "1"
-    if breakdown not in ("platform_placement", "age_gender"):
+    if breakdown not in ("none", "platform_placement", "age_gender"):
         breakdown = "platform_placement"
 
     if not date_start or not date_stop:

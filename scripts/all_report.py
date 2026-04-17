@@ -60,12 +60,14 @@ INSIGHT_FIELDS = [
 
 # Breakdown options
 BREAKDOWN_MAP = {
+    "none":               [],
     "platform_placement": ["publisher_platform", "platform_position"],
     "age_gender":         ["age", "gender"],
 }
 
 # DEDUPE_KEYS for age/gender breakdown (no Platform/Placement)
 DEDUPE_KEYS_AGE_GENDER = ["Ad Account ID", "Ad ID", "Date", "Age", "Gender"]
+DEDUPE_KEYS_NONE       = ["Ad Account ID", "Ad ID", "Date"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -107,7 +109,7 @@ def fetch_market(
     breakdown: str = "platform_placement",
 ) -> pd.DataFrame:
     """Fetch all ad accounts for one market and return transformed DataFrame."""
-    breakdowns = BREAKDOWN_MAP.get(breakdown, BREAKDOWN_MAP["platform_placement"])
+    breakdowns = BREAKDOWN_MAP.get(breakdown) or None  # empty list → None → no breakdown param
     logger.info(
         f"[{market}] Fetching All Meta data {date_start} → {date_stop} "
         f"(time_increment={time_increment}, breakdown={breakdown})"
@@ -198,8 +200,8 @@ def fetch_market(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _output_filename(time_increment: str | int, breakdown: str) -> str:
-    ti   = "monthly" if str(time_increment) == "monthly" else "daily"
-    bd   = "age_gender" if breakdown == "age_gender" else "platform_placement"
+    ti = "monthly" if str(time_increment) == "monthly" else "daily"
+    bd = breakdown if breakdown in ("none", "age_gender", "platform_placement") else "platform_placement"
     return f"HKTW_Meta_All_{ti}_{bd}.xlsx"
 
 
@@ -221,6 +223,8 @@ def load_existing(pa: PowerAutomateClient, output_file: str) -> pd.DataFrame:
 def _get_dedupe_keys(breakdown: str) -> list[str]:
     if breakdown == "age_gender":
         return DEDUPE_KEYS_AGE_GENDER
+    if breakdown == "none":
+        return DEDUPE_KEYS_NONE
     return DEDUPE_KEYS
 
 
@@ -266,7 +270,7 @@ def main():
 
     if time_increment not in ("1", "monthly"):
         time_increment = "1"
-    if breakdown not in ("platform_placement", "age_gender"):
+    if breakdown not in ("none", "platform_placement", "age_gender"):
         breakdown = "platform_placement"
 
     if not date_start or not date_stop:
