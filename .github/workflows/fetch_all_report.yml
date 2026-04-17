@@ -34,6 +34,7 @@ on:
         default: 'platform_placement'
         type: choice
         options:
+          - 'none'
           - 'platform_placement'
           - 'age_gender'
 
