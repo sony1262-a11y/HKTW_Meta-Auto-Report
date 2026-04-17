@@ -132,20 +132,17 @@ def debug_fetch_market(
     try:
         unique_ad_ids = list({str(r.get("ad_id", "")) for r in all_full_rows if r.get("ad_id")})
         story_id_map: dict[str, str] = {}
-        for r in all_full_rows:
-            ad_id    = str(r.get("ad_id", ""))
-            story_id = str(r.get("effective_object_story_id", ""))
-            if ad_id and story_id and ad_id not in story_id_map:
-                story_id_map[ad_id] = story_id
 
-        logger.info(f"[{market}] Starting creative/page lookup for {len(unique_ad_ids)} unique ads "
-                    f"({len(story_id_map)} have story_id)...")
+        logger.info(f"[{market}] Starting creative/page lookup for {len(unique_ad_ids)} unique ads...")
 
         creative_info_map = client.get_creative_info_for_ads(unique_ad_ids)
 
-        # Supplement story_id_map with page_id from creative info
+        # Build story_id_map from object_story_id in creative response
         for ad_id, info in creative_info_map.items():
-            if info.get("page_id") and ad_id not in story_id_map:
+            osi = info.get("object_story_id", "")
+            if osi and "_" in str(osi):
+                story_id_map[ad_id] = osi
+            elif info.get("page_id"):
                 story_id_map[ad_id] = f"{info['page_id']}_0"
 
         story_id_map_final = story_id_map
@@ -155,12 +152,14 @@ def debug_fetch_market(
         if video_ids:
             video_url_map = client.get_video_urls(video_ids)
 
-        resolved_pages   = sum(1 for v in page_name_map.values() if v)
-        resolved_images  = sum(1 for v in creative_info_map.values() if v.get("image_url"))
-        resolved_videos  = sum(1 for v in video_url_map.values() if v)
+        resolved_pages  = sum(1 for v in page_name_map.values() if v)
+        resolved_images = sum(1 for v in creative_info_map.values() if v.get("image_url"))
+        resolved_videos = sum(1 for v in video_url_map.values() if v)
+        resolved_posts  = sum(1 for v in story_id_map.values() if "_" in v and not v.endswith("_0"))
         logger.info(f"[{market}] Page names: {resolved_pages}/{len(unique_ad_ids)} | "
                     f"Images: {resolved_images}/{len(unique_ad_ids)} | "
-                    f"Videos: {resolved_videos}/{len(video_ids) if video_ids else 0}")
+                    f"Videos: {resolved_videos}/{len(video_ids) if video_ids else 0} | "
+                    f"Post URLs: {resolved_posts}/{len(unique_ad_ids)}")
     except Exception as e:
         import traceback
         logger.warning(f"[{market}] Creative/page lookup failed — fields will be blank: {e}")

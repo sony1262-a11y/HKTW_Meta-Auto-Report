@@ -52,7 +52,6 @@ INSIGHT_FIELDS = [
     "impressions", "spend",
     "actions",
     "date_start", "date_stop",
-    "effective_object_story_id",
 ]
 
 # Breakdowns: daily + platform/placement
@@ -173,28 +172,25 @@ def fetch_market(
     # Page name + creative info lookup
     unique_ad_ids = list({str(r.get("ad_id", "")) for r in all_rows if r.get("ad_id")})
     story_id_map: dict[str, str] = {}
-    for r in all_rows:
-        ad_id    = str(r.get("ad_id", ""))
-        story_id = str(r.get("effective_object_story_id", ""))
-        if ad_id and story_id and ad_id not in story_id_map:
-            story_id_map[ad_id] = story_id
 
     page_name_map: dict[str, str] = {}
     creative_info_map: dict[str, dict] = {}
     video_url_map: dict[str, str] = {}
 
     try:
-        # Fetch creative info (page_id + image_url + video_id) in one batch pass
+        # Fetch creative info (page_id + object_story_id + image_url + video_id)
         creative_info_map = client.get_creative_info_for_ads(unique_ad_ids)
 
-        # Build page_id map from creative info (supplement story_id_map)
+        # Build story_id_map from object_story_id in creative response
         for ad_id, info in creative_info_map.items():
-            if info.get("page_id") and ad_id not in story_id_map:
-                story_id_map[ad_id] = f"{info['page_id']}_0"  # dummy post_id to satisfy format
+            osi = info.get("object_story_id", "")
+            if osi and "_" in str(osi):
+                story_id_map[ad_id] = osi
+            elif info.get("page_id"):
+                story_id_map[ad_id] = f"{info['page_id']}_0"
 
         page_name_map = client.get_page_names_for_ads(unique_ad_ids, story_id_map=story_id_map)
 
-        # Fetch video permalink URLs for ads that have video_id
         video_ids = list({info["video_id"] for info in creative_info_map.values() if info.get("video_id")})
         if video_ids:
             video_url_map = client.get_video_urls(video_ids)

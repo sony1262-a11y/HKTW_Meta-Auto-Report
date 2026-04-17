@@ -421,7 +421,7 @@ class MetaAPIClient:
         Fetches all creative fields in one pass.
         """
         result: dict[str, dict] = {}
-        empty = {"page_id": "", "image_url": "", "video_id": ""}
+        empty = {"page_id": "", "object_story_id": "", "image_url": "", "video_id": ""}
 
         for i in range(0, len(ad_ids), self.BATCH_SIZE):
             chunk = ad_ids[i:i + self.BATCH_SIZE]
@@ -431,6 +431,7 @@ class MetaAPIClient:
                     "relative_url": (
                         f"{ad_id}?fields=creative{{"
                         f"object_story_spec{{page_id}},"
+                        f"object_story_id,"
                         f"image_url,"
                         f"video_id"
                         f"}}"
@@ -463,13 +464,15 @@ class MetaAPIClient:
                         creative = body.get("creative", {})
                         if j == 0 and i == 0:
                             logger.info(f"[{self.market}] creative API sample body: {str(body)[:300]}")
-                        page_id   = creative.get("object_story_spec", {}).get("page_id", "")
-                        image_url = creative.get("image_url", "")
-                        video_id  = str(creative.get("video_id", "")) if creative.get("video_id") else ""
+                        page_id        = creative.get("object_story_spec", {}).get("page_id", "")
+                        object_story_id= creative.get("object_story_id", "")
+                        image_url      = creative.get("image_url", "")
+                        video_id       = str(creative.get("video_id", "")) if creative.get("video_id") else ""
                         result[ad_id] = {
-                            "page_id":   str(page_id) if page_id else "",
-                            "image_url": image_url,
-                            "video_id":  video_id,
+                            "page_id":          str(page_id) if page_id else "",
+                            "object_story_id":  str(object_story_id) if object_story_id else "",
+                            "image_url":        image_url,
+                            "video_id":         video_id,
                         }
                         if page_id:
                             page_ids_found += 1
