@@ -137,7 +137,8 @@ class PowerAutomateClient:
         }
 
         resp = requests.post(self.download_url, json=payload, timeout=TIMEOUT)
-        if resp.status_code == 404:
+        if resp.status_code in (404, 502, 503, 504):
+            logger.warning(f"download_bytes: HTTP {resp.status_code} for {sp_filename} — treating as not found")
             return None
         resp.raise_for_status()
 
