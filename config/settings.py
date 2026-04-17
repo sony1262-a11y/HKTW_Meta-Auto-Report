@@ -31,6 +31,7 @@ SP_PATHS = {
     "control_panel": "/Shared Documents/COE Team/Media Report/Control_Panel",
     "cpas":          "/Shared Documents/COE Team/Media Report/HKTW_Meta CPAS",
     "kol":           "/Shared Documents/COE Team/Media Report/HKTW_Meta KOL",
+    "all":           "/Shared Documents/COE Team/Media Report/HKTW_Meta All",
 }
 
 # Control Panel files (Ad Account lists + Token sheets)
