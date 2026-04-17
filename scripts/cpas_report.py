@@ -47,7 +47,6 @@ INSIGHT_FIELDS = [
     "actions", "action_values", "purchase_roas",
     "catalog_segment_actions", "catalog_segment_value",
     "date_start", "date_stop",
-    "effective_object_story_id",
 ]
 
 
@@ -95,11 +94,6 @@ def fetch_market(market: str, date_start: str, date_stop: str, pa: PowerAutomate
     # Creative info lookup (Post URL, Image URL, Video URL)
     unique_ad_ids = list({str(r.get("ad_id", "")) for r in all_rows if r.get("ad_id")})
     story_id_map: dict[str, str] = {}
-    for r in all_rows:
-        ad_id    = str(r.get("ad_id", ""))
-        story_id = str(r.get("effective_object_story_id", ""))
-        if ad_id and story_id and ad_id not in story_id_map:
-            story_id_map[ad_id] = story_id
 
     creative_info_map: dict[str, dict] = {}
     video_url_map: dict[str, str] = {}

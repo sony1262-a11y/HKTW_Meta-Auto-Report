@@ -144,11 +144,6 @@ def debug_fetch_market(market: str, date_start: str, date_stop: str, pa: PowerAu
     story_id_map: dict[str, str] = {}
     try:
         unique_ad_ids = list({str(r.get("ad_id", "")) for r in all_flat_rows if r.get("ad_id")})
-        for r in all_flat_rows:
-            ad_id    = str(r.get("ad_id", ""))
-            story_id = str(r.get("effective_object_story_id", ""))
-            if ad_id and story_id and ad_id not in story_id_map:
-                story_id_map[ad_id] = story_id
 
         creative_info_map = client.get_creative_info_for_ads(unique_ad_ids)
         for ad_id, info in creative_info_map.items():
