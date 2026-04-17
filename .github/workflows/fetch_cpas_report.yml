@@ -20,6 +20,14 @@ on:
         description: 'End date (YYYY-MM-DD)'
         required: true
         type: string
+      time_increment:
+        description: 'Time breakdown (1 = daily, monthly = monthly)'
+        required: true
+        default: '1'
+        type: choice
+        options:
+          - '1'
+          - 'monthly'
 
 jobs:
   fetch-cpas:
@@ -51,4 +59,5 @@ jobs:
           MARKET:               ${{ github.event.inputs.market }}
           DATE_START:           ${{ github.event.inputs.date_start }}
           DATE_STOP:            ${{ github.event.inputs.date_stop }}
+          TIME_INCREMENT:       ${{ github.event.inputs.time_increment }}
         run: python scripts/cpas_report.py
