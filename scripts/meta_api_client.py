@@ -435,7 +435,7 @@ class MetaAPIClient:
                         f"{ad_id}?fields=creative{{"
                         f"object_story_spec{{"
                         f"page_id,"
-                        f"link_data{{video_id,picture}},"
+                        f"link_data{{picture}},"
                         f"video_data{{video_id,image_url}}"
                         f"}},"
                         f"object_story_id,"
@@ -476,18 +476,17 @@ class MetaAPIClient:
                         page_id = oss.get("page_id", "")
                         object_story_id = creative.get("object_story_id", "")
 
-                        # image_url: top-level → video_data.image_url → link_data.picture
+                        # image_url: top-level → video_data.image_url → link_data.picture (Collection cover)
                         image_url = (
                             creative.get("image_url", "") or
                             oss.get("video_data", {}).get("image_url", "") or
                             oss.get("link_data", {}).get("picture", "")
                         )
 
-                        # video_id: top-level → link_data (Collection/Carousel cover GIF)
-                        #           → video_data (Video ad)
+                        # video_id: top-level → video_data.video_id (Video ad)
+                        # Note: Collection cover GIF uses video_id at top level if it's a video asset
                         raw_vid = (
                             creative.get("video_id") or
-                            oss.get("link_data", {}).get("video_id") or
                             oss.get("video_data", {}).get("video_id")
                         )
                         video_id = str(raw_vid) if raw_vid else ""
