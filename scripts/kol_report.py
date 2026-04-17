@@ -52,6 +52,7 @@ INSIGHT_FIELDS = [
     "impressions", "spend",
     "actions",
     "date_start", "date_stop",
+    "effective_object_story_id",
 ]
 
 # Breakdowns: daily + platform/placement
@@ -130,11 +131,12 @@ def fetch_market(
     date_stop: str,
     fx_rates: dict[str, float],
     pa: PowerAutomateClient | None = None,
+    time_increment: str | int = 1,
 ) -> pd.DataFrame:
     """Fetch all KOL ad accounts for one market and return transformed DataFrame."""
-    logger.info(f"[{market}] Fetching KOL data {date_start} → {date_stop}")
+    logger.info(f"[{market}] Fetching KOL data {date_start} → {date_stop} (time_increment={time_increment})")
 
-    accounts = load_accounts(market, pa, report_type=None)  # all types: Brand, EC, CPAS, KOL
+    accounts = load_accounts(market, pa, report_type=None)
 
     if not accounts:
         logger.warning(f"[{market}] No KOL accounts found in Control Panel — skipping")
@@ -150,12 +152,13 @@ def fetch_market(
 
         try:
             rows = client.get_insights(
-                ad_account_id = acct_id,
-                date_start    = date_start,
-                date_stop     = date_stop,
-                level         = "ad",
-                fields        = INSIGHT_FIELDS,
-                breakdowns    = BREAKDOWNS,
+                ad_account_id  = acct_id,
+                date_start     = date_start,
+                date_stop      = date_stop,
+                level          = "ad",
+                fields         = INSIGHT_FIELDS,
+                breakdowns     = BREAKDOWNS,
+                time_increment = time_increment,
             )
             all_rows.extend(rows)
             logger.info(f"[{market}]     {len(rows)} rows fetched")
@@ -167,15 +170,46 @@ def fetch_market(
         logger.warning(f"[{market}] No data returned")
         return pd.DataFrame(columns=OUTPUT_COLUMNS)
 
-    # ── Page Name lookup via batch API ────────────────────────────────────────
+    # Page name + creative info lookup
     unique_ad_ids = list({str(r.get("ad_id", "")) for r in all_rows if r.get("ad_id")})
-    page_name_map: dict[str, str] = {}
-    try:
-        page_name_map = client.get_page_names_for_ads(unique_ad_ids)
-    except Exception as e:
-        logger.warning(f"[{market}] Page name lookup failed — Page Name will be blank: {e}")
+    story_id_map: dict[str, str] = {}
+    for r in all_rows:
+        ad_id    = str(r.get("ad_id", ""))
+        story_id = str(r.get("effective_object_story_id", ""))
+        if ad_id and story_id and ad_id not in story_id_map:
+            story_id_map[ad_id] = story_id
 
-    return transform(all_rows, fx_rates=fx_rates, page_name_map=page_name_map)
+    page_name_map: dict[str, str] = {}
+    creative_info_map: dict[str, dict] = {}
+    video_url_map: dict[str, str] = {}
+
+    try:
+        # Fetch creative info (page_id + image_url + video_id) in one batch pass
+        creative_info_map = client.get_creative_info_for_ads(unique_ad_ids)
+
+        # Build page_id map from creative info (supplement story_id_map)
+        for ad_id, info in creative_info_map.items():
+            if info.get("page_id") and ad_id not in story_id_map:
+                story_id_map[ad_id] = f"{info['page_id']}_0"  # dummy post_id to satisfy format
+
+        page_name_map = client.get_page_names_for_ads(unique_ad_ids, story_id_map=story_id_map)
+
+        # Fetch video permalink URLs for ads that have video_id
+        video_ids = list({info["video_id"] for info in creative_info_map.values() if info.get("video_id")})
+        if video_ids:
+            video_url_map = client.get_video_urls(video_ids)
+
+    except Exception as e:
+        logger.warning(f"[{market}] Creative/page lookup failed — fields will be blank: {e}")
+
+    return transform(
+        all_rows,
+        fx_rates=fx_rates,
+        page_name_map=page_name_map,
+        creative_info_map=creative_info_map,
+        video_url_map=video_url_map,
+        story_id_map=story_id_map,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -229,23 +263,26 @@ def save_to_excel(df: pd.DataFrame) -> bytes:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    market     = os.environ.get("MARKET", "ALL").upper()
-    date_start = os.environ.get("DATE_START")
-    date_stop  = os.environ.get("DATE_STOP")
+    market         = os.environ.get("MARKET", "ALL").upper()
+    date_start     = os.environ.get("DATE_START")
+    date_stop      = os.environ.get("DATE_STOP")
+    time_increment = os.environ.get("TIME_INCREMENT", "1")
+    if time_increment not in ("1", "monthly"):
+        time_increment = "1"
 
     if not date_start or not date_stop:
         raise ValueError("DATE_START and DATE_STOP environment variables are required")
 
     markets_to_run = list(MARKETS.keys()) if market == "ALL" else [market]
 
-    logger.info(f"KOL Report | Markets: {markets_to_run} | {date_start} → {date_stop}")
+    logger.info(f"KOL Report | Markets: {markets_to_run} | {date_start} → {date_stop} | time_increment={time_increment}")
 
     pa       = PowerAutomateClient()
     fx_rates = load_fx_rates(pa)
 
     new_frames = []
     for m in markets_to_run:
-        df_m = fetch_market(m, date_start, date_stop, fx_rates, pa)
+        df_m = fetch_market(m, date_start, date_stop, fx_rates, pa, time_increment=time_increment)
         if not df_m.empty:
             new_frames.append(df_m)
 

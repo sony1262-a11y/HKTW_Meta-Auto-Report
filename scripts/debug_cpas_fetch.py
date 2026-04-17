@@ -55,7 +55,7 @@ def append_summary(lines: list[str]):
 # Per-market debug fetch
 # ─────────────────────────────────────────────────────────────────────────────
 
-def debug_fetch_market(market: str, date_start: str, date_stop: str, pa: PowerAutomateClient) -> dict:
+def debug_fetch_market(market: str, date_start: str, date_stop: str, pa: PowerAutomateClient, time_increment: str | int = 1) -> dict:
     """
     Fetch + transform for one market.
     Returns a summary dict.
@@ -100,11 +100,12 @@ def debug_fetch_market(market: str, date_start: str, date_stop: str, pa: PowerAu
         acct_name = acct["name"]
         try:
             rows = client.get_insights(
-                ad_account_id = acct_id,
-                date_start    = date_start,
-                date_stop     = date_stop,
-                level         = "ad",
-                fields        = INSIGHT_FIELDS,
+                ad_account_id  = acct_id,
+                date_start     = date_start,
+                date_stop      = date_stop,
+                level          = "ad",
+                fields         = INSIGHT_FIELDS,
+                time_increment = time_increment,
             )
             logger.info(f"[{market}] {acct_name}: {len(rows)} raw rows")
 
@@ -180,10 +181,13 @@ def upload_to_sharepoint_if_requested(market: str, date_start: str, date_stop: s
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    market     = os.environ.get("MARKET", "ALL").upper()
-    date_start = os.environ.get("DATE_START")
-    date_stop  = os.environ.get("DATE_STOP")
-    upload     = os.environ.get("UPLOAD_TO_SHAREPOINT", "false").lower() == "true"
+    market         = os.environ.get("MARKET", "ALL").upper()
+    date_start     = os.environ.get("DATE_START")
+    date_stop      = os.environ.get("DATE_STOP")
+    upload         = os.environ.get("UPLOAD_TO_SHAREPOINT", "false").lower() == "true"
+    time_increment = os.environ.get("TIME_INCREMENT", "1")
+    if time_increment not in ("1", "monthly"):
+        time_increment = "1"
 
     if not date_start or not date_stop:
         raise ValueError("DATE_START and DATE_STOP are required")
@@ -194,8 +198,9 @@ def main():
 
     logger.info("=" * 60)
     logger.info(f"DEBUG CPAS FETCH")
-    logger.info(f"Markets:    {markets_to_run}")
-    logger.info(f"Date range: {date_start} → {date_stop}")
+    logger.info(f"Markets:        {markets_to_run}")
+    logger.info(f"Date range:     {date_start} → {date_stop}")
+    logger.info(f"Time increment: {time_increment}")
     logger.info(f"SharePoint upload: {upload}")
     logger.info("=" * 60)
 
@@ -203,7 +208,7 @@ def main():
     all_transformed = []
     pa = PowerAutomateClient()
     for m in markets_to_run:
-        s = debug_fetch_market(m, date_start, date_stop, pa)
+        s = debug_fetch_market(m, date_start, date_stop, pa, time_increment=time_increment)
         all_summaries.append(s)
         # Collect transformed data for merged file
         t_file = os.path.join(OUTPUT_DIR, f"CPAS_transformed_{m}_{date_start}_{date_stop}.xlsx")

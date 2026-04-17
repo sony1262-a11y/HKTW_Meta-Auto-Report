@@ -54,6 +54,7 @@ def debug_fetch_market(
     date_stop: str,
     fx_rates: dict,
     pa: PowerAutomateClient,
+    time_increment: str | int = 1,
 ) -> dict:
     summary = {
         "market":           market,
@@ -63,7 +64,7 @@ def debug_fetch_market(
         "errors":           [],
     }
 
-    accounts = load_accounts(market, pa, report_type=None)  # all types: Brand, EC, CPAS, KOL
+    accounts = load_accounts(market, pa, report_type=None)
     summary["accounts"] = [{"id": a["id"], "name": a["name"]} for a in accounts]
 
     logger.info(f"[{market}] KOL accounts loaded from Control Panel: {len(accounts)}")
@@ -91,12 +92,13 @@ def debug_fetch_market(
         acct_name = acct["name"]
         try:
             rows = client.get_insights(
-                ad_account_id = acct_id,
-                date_start    = date_start,
-                date_stop     = date_stop,
-                level         = "ad",
-                fields        = INSIGHT_FIELDS,
-                breakdowns    = BREAKDOWNS,
+                ad_account_id  = acct_id,
+                date_start     = date_start,
+                date_stop      = date_stop,
+                level          = "ad",
+                fields         = INSIGHT_FIELDS,
+                breakdowns     = BREAKDOWNS,
+                time_increment = time_increment,
             )
             logger.info(f"[{market}] {acct_name}: {len(rows)} rows")
 
@@ -122,22 +124,58 @@ def debug_fetch_market(
     df_raw = pd.DataFrame(all_raw_rows)
     save_excel(df_raw, f"KOL_raw_{market}_{date_start}_{date_stop}.xlsx", "Raw API Response")
 
-    # Page name lookup
+    # Page name + creative info lookup
     page_name_map: dict[str, str] = {}
+    creative_info_map: dict[str, dict] = {}
+    video_url_map: dict[str, str] = {}
+    story_id_map_final: dict[str, str] = {}
     try:
         unique_ad_ids = list({str(r.get("ad_id", "")) for r in all_full_rows if r.get("ad_id")})
-        logger.info(f"[{market}] Starting page name lookup for {len(unique_ad_ids)} unique ads...")
-        page_name_map = client.get_page_names_for_ads(unique_ad_ids)
-        resolved = sum(1 for v in page_name_map.values() if v)
-        logger.info(f"[{market}] Page names resolved: {resolved}/{len(unique_ad_ids)}")
+        story_id_map: dict[str, str] = {}
+        for r in all_full_rows:
+            ad_id    = str(r.get("ad_id", ""))
+            story_id = str(r.get("effective_object_story_id", ""))
+            if ad_id and story_id and ad_id not in story_id_map:
+                story_id_map[ad_id] = story_id
+
+        logger.info(f"[{market}] Starting creative/page lookup for {len(unique_ad_ids)} unique ads "
+                    f"({len(story_id_map)} have story_id)...")
+
+        creative_info_map = client.get_creative_info_for_ads(unique_ad_ids)
+
+        # Supplement story_id_map with page_id from creative info
+        for ad_id, info in creative_info_map.items():
+            if info.get("page_id") and ad_id not in story_id_map:
+                story_id_map[ad_id] = f"{info['page_id']}_0"
+
+        story_id_map_final = story_id_map
+        page_name_map = client.get_page_names_for_ads(unique_ad_ids, story_id_map=story_id_map)
+
+        video_ids = list({info["video_id"] for info in creative_info_map.values() if info.get("video_id")})
+        if video_ids:
+            video_url_map = client.get_video_urls(video_ids)
+
+        resolved_pages   = sum(1 for v in page_name_map.values() if v)
+        resolved_images  = sum(1 for v in creative_info_map.values() if v.get("image_url"))
+        resolved_videos  = sum(1 for v in video_url_map.values() if v)
+        logger.info(f"[{market}] Page names: {resolved_pages}/{len(unique_ad_ids)} | "
+                    f"Images: {resolved_images}/{len(unique_ad_ids)} | "
+                    f"Videos: {resolved_videos}/{len(video_ids) if video_ids else 0}")
     except Exception as e:
         import traceback
-        logger.warning(f"[{market}] Page name lookup failed — Page Name will be blank: {e}")
+        logger.warning(f"[{market}] Creative/page lookup failed — fields will be blank: {e}")
         logger.warning(traceback.format_exc())
 
     # Save transformed
     try:
-        df_t = transform(all_full_rows, fx_rates=fx_rates, page_name_map=page_name_map)
+        df_t = transform(
+            all_full_rows,
+            fx_rates=fx_rates,
+            page_name_map=page_name_map,
+            creative_info_map=creative_info_map,
+            video_url_map=video_url_map,
+            story_id_map=story_id_map_final,
+        )
         summary["transformed_rows"] = len(df_t)
         save_excel(df_t, f"KOL_transformed_{market}_{date_start}_{date_stop}.xlsx", "Transformed")
     except Exception as e:
@@ -149,10 +187,13 @@ def debug_fetch_market(
 
 
 def main():
-    market     = os.environ.get("MARKET", "ALL").upper()
-    date_start = os.environ.get("DATE_START")
-    date_stop  = os.environ.get("DATE_STOP")
-    upload     = os.environ.get("UPLOAD_TO_SHAREPOINT", "false").lower() == "true"
+    market         = os.environ.get("MARKET", "ALL").upper()
+    date_start     = os.environ.get("DATE_START")
+    date_stop      = os.environ.get("DATE_STOP")
+    upload         = os.environ.get("UPLOAD_TO_SHAREPOINT", "false").lower() == "true"
+    time_increment = os.environ.get("TIME_INCREMENT", "1")
+    if time_increment not in ("1", "monthly"):
+        time_increment = "1"
 
     if not date_start or not date_stop:
         raise ValueError("DATE_START and DATE_STOP are required")
@@ -165,16 +206,17 @@ def main():
 
     logger.info("=" * 60)
     logger.info("DEBUG KOL FETCH")
-    logger.info(f"Markets:    {markets_to_run}")
-    logger.info(f"Date range: {date_start} → {date_stop}")
-    logger.info(f"FX rates:   {fx_rates}")
+    logger.info(f"Markets:        {markets_to_run}")
+    logger.info(f"Date range:     {date_start} → {date_stop}")
+    logger.info(f"Time increment: {time_increment}")
+    logger.info(f"FX rates:       {fx_rates}")
     logger.info(f"SharePoint upload: {upload}")
     logger.info("=" * 60)
 
     all_summaries = []
     all_transformed = []
     for m in markets_to_run:
-        s = debug_fetch_market(m, date_start, date_stop, fx_rates, pa)
+        s = debug_fetch_market(m, date_start, date_stop, fx_rates, pa, time_increment=time_increment)
         all_summaries.append(s)
         t_file = os.path.join(OUTPUT_DIR, f"KOL_transformed_{m}_{date_start}_{date_stop}.xlsx")
         if os.path.exists(t_file):

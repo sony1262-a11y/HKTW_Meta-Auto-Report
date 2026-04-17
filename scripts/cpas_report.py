@@ -54,9 +54,9 @@ INSIGHT_FIELDS = [
 # Per-market fetch
 # ─────────────────────────────────────────────────────────────────────────────
 
-def fetch_market(market: str, date_start: str, date_stop: str, pa: PowerAutomateClient) -> pd.DataFrame:
+def fetch_market(market: str, date_start: str, date_stop: str, pa: PowerAutomateClient, time_increment: str | int = 1) -> pd.DataFrame:
     """Fetch all CPAS ad accounts for one market and return transformed DataFrame."""
-    logger.info(f"[{market}] Fetching CPAS data {date_start} → {date_stop}")
+    logger.info(f"[{market}] Fetching CPAS data {date_start} → {date_stop} (time_increment={time_increment})")
 
     accounts = load_accounts(market, pa, report_type="CPAS")
 
@@ -74,11 +74,12 @@ def fetch_market(market: str, date_start: str, date_stop: str, pa: PowerAutomate
 
         try:
             rows = client.get_insights(
-                ad_account_id = acct_id,
-                date_start    = date_start,
-                date_stop     = date_stop,
-                level         = "ad",
-                fields        = INSIGHT_FIELDS,
+                ad_account_id  = acct_id,
+                date_start     = date_start,
+                date_stop      = date_stop,
+                level          = "ad",
+                fields         = INSIGHT_FIELDS,
+                time_increment = time_increment,
             )
             all_rows.extend(rows)
             logger.info(f"[{market}]     {len(rows)} rows fetched")
@@ -150,14 +151,17 @@ def save_to_excel(df: pd.DataFrame) -> bytes:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    market     = os.environ.get("MARKET", "ALL").upper()
-    date_start = os.environ.get("DATE_START")
-    date_stop  = os.environ.get("DATE_STOP")
+    market         = os.environ.get("MARKET", "ALL").upper()
+    date_start     = os.environ.get("DATE_START")
+    date_stop      = os.environ.get("DATE_STOP")
+    time_increment = os.environ.get("TIME_INCREMENT", "1")
+    # Allow "1" or "monthly"; default to daily
+    if time_increment not in ("1", "monthly"):
+        time_increment = "1"
 
     if not date_start or not date_stop:
         raise ValueError("DATE_START and DATE_STOP environment variables are required")
 
-    # Determine which markets to fetch
     if market == "ALL":
         markets_to_run = list(MARKETS.keys())
     elif market in MARKETS:
@@ -165,25 +169,22 @@ def main():
     else:
         raise ValueError(f"Unknown MARKET value: {market}")
 
-    logger.info(f"CPAS Report | Markets: {markets_to_run} | {date_start} → {date_stop}")
+    logger.info(f"CPAS Report | Markets: {markets_to_run} | {date_start} → {date_stop} | time_increment={time_increment}")
 
     pa = PowerAutomateClient()
 
-    # Fetch new data from all target markets
     new_frames = []
     for m in markets_to_run:
-        df_m = fetch_market(m, date_start, date_stop, pa)
+        df_m = fetch_market(m, date_start, date_stop, pa, time_increment=time_increment)
         if not df_m.empty:
             new_frames.append(df_m)
 
     new_data = pd.concat(new_frames, ignore_index=True) if new_frames else pd.DataFrame(columns=OUTPUT_COLUMNS)
     logger.info(f"Total new rows fetched: {len(new_data)}")
 
-    # Accumulate with existing SharePoint data
     existing = load_existing(pa)
     merged   = merge_and_deduplicate(existing, new_data)
 
-    # Upload back to SharePoint
     logger.info(f"Uploading {len(merged)} rows → {SP_FOLDER}/{OUTPUT_FILE}")
     excel_bytes = save_to_excel(merged)
     pa.upload_bytes(excel_bytes, SP_FOLDER, OUTPUT_FILE)

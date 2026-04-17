@@ -126,18 +126,20 @@ class MetaAPIClient:
         fields: list[str] | None = None,
         breakdowns: list[str] | None = None,
         filtering: list[dict] | None = None,
+        time_increment: str | int = 1,
     ) -> list[dict]:
         """
         Fetch ad insights for a given ad account and date range.
 
         Args:
-            ad_account_id: e.g. "act_1234567890"
-            date_start:    "YYYY-MM-DD"
-            date_stop:     "YYYY-MM-DD"
-            level:         "ad" | "adset" | "campaign" | "account"
-            fields:        list of insight fields to request
-            breakdowns:    optional breakdown dimensions
-            filtering:     optional filter array
+            ad_account_id:  e.g. "act_1234567890"
+            date_start:     "YYYY-MM-DD"
+            date_stop:      "YYYY-MM-DD"
+            level:          "ad" | "adset" | "campaign" | "account"
+            fields:         list of insight fields to request
+            breakdowns:     optional breakdown dimensions
+            filtering:      optional filter array
+            time_increment: 1 (daily) or "monthly"
 
         Returns:
             List of row dicts.
@@ -147,12 +149,12 @@ class MetaAPIClient:
 
         url = f"{META_API_BASE}/{ad_account_id}/insights"
         params = {
-            "level":        level,
-            "fields":       ",".join(fields),
-            "time_range":   f'{{"since":"{date_start}","until":"{date_stop}"}}',
-            "time_increment": 1,       # daily breakdown
-            "access_token": self.access_token,
-            "limit":        500,
+            "level":          level,
+            "fields":         ",".join(fields),
+            "time_range":     f'{{"since":"{date_start}","until":"{date_stop}"}}',
+            "time_increment": time_increment,
+            "access_token":   self.access_token,
+            "limit":          500,
         }
         if breakdowns:
             params["breakdowns"] = ",".join(breakdowns)
@@ -304,7 +306,7 @@ class MetaAPIClient:
         return all_rows
 
     # ─────────────────────────────────────────
-    # Page Name lookup (for KOL report)
+    # Page Name + Creative info lookup (KOL)
     # ─────────────────────────────────────────
 
     BATCH_SIZE = 50  # Meta Batch API limit
@@ -312,12 +314,8 @@ class MetaAPIClient:
     def get_page_names_for_ads(self, ad_ids: list[str], story_id_map: dict[str, str] | None = None) -> dict[str, str]:
         """
         Given a list of ad IDs, return a mapping of ad_id → page_name.
-
-        Primary:  extract page_id from effective_object_story_id ("{page_id}_{post_id}")
-                  passed in via story_id_map — no extra API call needed.
-        Fallback: batch-query ad creatives to get page_id (for ads without story_id).
-        Then:     batch-query page names from page_ids.
-
+        Uses story_id_map (effective_object_story_id) as primary source for page_id.
+        Falls back to creative API for any ads missing a story_id.
         Returns "" for any ad whose page cannot be resolved.
         """
         unique_ids = list(set(str(i) for i in ad_ids if i))
@@ -326,10 +324,8 @@ class MetaAPIClient:
 
         logger.info(f"[{self.market}] Resolving page names for {len(unique_ids)} unique ads...")
 
-        # Step 1: ad_id → page_id
         ad_to_page: dict[str, str] = {}
 
-        # Primary: extract from effective_object_story_id
         if story_id_map:
             for ad_id in unique_ids:
                 story_id = story_id_map.get(ad_id, "")
@@ -338,18 +334,17 @@ class MetaAPIClient:
                     if page_id.isdigit():
                         ad_to_page[ad_id] = page_id
 
-        # Fallback: creative API for ads still missing page_id
         missing = [ad_id for ad_id in unique_ids if ad_id not in ad_to_page]
         if missing:
             logger.info(f"[{self.market}] Falling back to creative API for {len(missing)} ads...")
-            fallback = self._batch_get_page_ids(missing)
-            ad_to_page.update(fallback)
+            creative_data = self._batch_get_creative_info(missing)
+            for ad_id, info in creative_data.items():
+                if info.get("page_id"):
+                    ad_to_page[ad_id] = info["page_id"]
 
-        # Step 2: page_id → page_name
         unique_page_ids = list(set(v for v in ad_to_page.values() if v))
         page_id_to_name = self._batch_get_page_names(unique_page_ids)
 
-        # Step 3: join
         result = {}
         for ad_id in unique_ids:
             page_id   = ad_to_page.get(ad_id, "")
@@ -360,29 +355,93 @@ class MetaAPIClient:
         logger.info(f"[{self.market}] Page names resolved: {resolved}/{len(unique_ids)}")
         return result
 
-    def _batch_get_page_ids(self, ad_ids: list[str]) -> dict[str, str]:
+    def get_creative_info_for_ads(self, ad_ids: list[str]) -> dict[str, dict]:
         """
-        Batch query: ad_id → page_id via ad creative.
-        Returns { ad_id: page_id }
+        Batch-query creative fields for a list of ad IDs.
+        Returns { ad_id: { "page_id", "image_url", "video_id" } }
+        All values default to "" if not available.
         """
-        result = {}
+        unique_ids = list(set(str(i) for i in ad_ids if i))
+        if not unique_ids:
+            return {}
+        logger.info(f"[{self.market}] Fetching creative info for {len(unique_ids)} unique ads...")
+        return self._batch_get_creative_info(unique_ids)
+
+    def get_video_urls(self, video_ids: list[str]) -> dict[str, str]:
+        """
+        Batch query: video_id → permalink_url.
+        Returns { video_id: permalink_url }
+        """
+        unique_ids = list(set(str(v) for v in video_ids if v))
+        if not unique_ids:
+            return {}
+
+        logger.info(f"[{self.market}] Fetching video URLs for {len(unique_ids)} unique videos...")
+        result: dict[str, str] = {}
+
+        for i in range(0, len(unique_ids), self.BATCH_SIZE):
+            chunk = unique_ids[i:i + self.BATCH_SIZE]
+            batch = [
+                {"method": "GET", "relative_url": f"{vid}?fields=permalink_url"}
+                for vid in chunk
+            ]
+            try:
+                resp = requests.post(
+                    f"{META_API_BASE}/",
+                    data={"access_token": self.access_token, "batch": json.dumps(batch)},
+                    timeout=60,
+                )
+                resp.raise_for_status()
+                responses = resp.json()
+
+                for j, item in enumerate(responses):
+                    vid = chunk[j]
+                    if not item or item.get("code") != 200:
+                        result[vid] = ""
+                        continue
+                    try:
+                        body = json.loads(item["body"])
+                        result[vid] = body.get("permalink_url", "")
+                    except Exception:
+                        result[vid] = ""
+
+                time.sleep(0.5)
+            except Exception as e:
+                logger.warning(f"[{self.market}] Batch video URL lookup failed (chunk {i}): {e}")
+                for vid in chunk:
+                    result[vid] = ""
+
+        resolved = sum(1 for v in result.values() if v)
+        logger.info(f"[{self.market}] get_video_urls: {resolved}/{len(unique_ids)} URLs resolved")
+        return result
+
+    def _batch_get_creative_info(self, ad_ids: list[str]) -> dict[str, dict]:
+        """
+        Batch query: ad_id → { page_id, image_url, video_id }
+        Fetches all creative fields in one pass.
+        """
+        result: dict[str, dict] = {}
+        empty = {"page_id": "", "image_url": "", "video_id": ""}
 
         for i in range(0, len(ad_ids), self.BATCH_SIZE):
             chunk = ad_ids[i:i + self.BATCH_SIZE]
             batch = [
                 {
                     "method":       "GET",
-                    "relative_url": f"{ad_id}?fields=creative{{object_story_spec{{page_id}}}}",
+                    "relative_url": (
+                        f"{ad_id}?fields=creative{{"
+                        f"object_story_spec{{page_id}},"
+                        f"image_url,"
+                        f"video_id"
+                        f"}}"
+                    ),
                 }
                 for ad_id in chunk
             ]
             try:
                 resp = requests.post(
                     f"{META_API_BASE}/",
-                    data={
-                        "access_token": self.access_token,
-                        "batch":        json.dumps(batch),
-                    },
+                    data={"access_token": self.access_token, "batch": json.dumps(batch)},
                     timeout=60,
                 )
                 resp.raise_for_status()
@@ -392,41 +451,42 @@ class MetaAPIClient:
                 for j, item in enumerate(responses):
                     ad_id = chunk[j]
                     if not item or item.get("code") != 200:
-                        # Log first failure in each chunk for diagnosis
                         if j == 0 and i == 0:
                             logger.warning(
                                 f"[{self.market}] creative API response code={item.get('code') if item else 'None'} "
                                 f"body={str(item.get('body', ''))[:300] if item else 'None'}"
                             )
-                        result[ad_id] = ""
+                        result[ad_id] = dict(empty)
                         continue
                     try:
-                        body    = json.loads(item["body"])
-                        page_id = (
-                            body.get("creative", {})
-                                .get("object_story_spec", {})
-                                .get("page_id", "")
-                        )
-                        # Log first response body for diagnosis (first chunk only)
+                        body     = json.loads(item["body"])
+                        creative = body.get("creative", {})
                         if j == 0 and i == 0:
                             logger.info(f"[{self.market}] creative API sample body: {str(body)[:300]}")
-                        result[ad_id] = str(page_id) if page_id else ""
+                        page_id   = creative.get("object_story_spec", {}).get("page_id", "")
+                        image_url = creative.get("image_url", "")
+                        video_id  = str(creative.get("video_id", "")) if creative.get("video_id") else ""
+                        result[ad_id] = {
+                            "page_id":   str(page_id) if page_id else "",
+                            "image_url": image_url,
+                            "video_id":  video_id,
+                        }
                         if page_id:
                             page_ids_found += 1
-                    except Exception as e:
-                        result[ad_id] = ""
+                    except Exception:
+                        result[ad_id] = dict(empty)
 
                 if i == 0:
                     logger.info(f"[{self.market}] creative API chunk 0: {page_ids_found}/{len(chunk)} page_ids found")
                 time.sleep(0.5)
 
             except Exception as e:
-                logger.warning(f"[{self.market}] Batch page_id lookup failed (chunk {i}): {e}")
+                logger.warning(f"[{self.market}] Batch creative lookup failed (chunk {i}): {e}")
                 for ad_id in chunk:
-                    result[ad_id] = ""
+                    result[ad_id] = dict(empty)
 
-        page_ids_total = sum(1 for v in result.values() if v)
-        logger.info(f"[{self.market}] _batch_get_page_ids: {page_ids_total}/{len(ad_ids)} page_ids resolved")
+        total_page_ids = sum(1 for v in result.values() if v.get("page_id"))
+        logger.info(f"[{self.market}] _batch_get_creative_info: {total_page_ids}/{len(ad_ids)} page_ids resolved")
         return result
 
     def _batch_get_page_names(self, page_ids: list[str]) -> dict[str, str]:
@@ -444,19 +504,13 @@ class MetaAPIClient:
         for i in range(0, len(page_ids), self.BATCH_SIZE):
             chunk = page_ids[i:i + self.BATCH_SIZE]
             batch = [
-                {
-                    "method":       "GET",
-                    "relative_url": f"{page_id}?fields=name",
-                }
+                {"method": "GET", "relative_url": f"{page_id}?fields=name"}
                 for page_id in chunk
             ]
             try:
                 resp = requests.post(
                     f"{META_API_BASE}/",
-                    data={
-                        "access_token": self.access_token,
-                        "batch":        json.dumps(batch),
-                    },
+                    data={"access_token": self.access_token, "batch": json.dumps(batch)},
                     timeout=60,
                 )
                 resp.raise_for_status()

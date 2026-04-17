@@ -275,16 +275,20 @@ def transform(
     raw_rows: list[dict],
     fx_rates: dict[str, float] | None = None,
     page_name_map: dict[str, str] | None = None,
+    creative_info_map: dict[str, dict] | None = None,
+    video_url_map: dict[str, str] | None = None,
+    story_id_map: dict[str, str] | None = None,
 ) -> pd.DataFrame:
     """
     Transform raw Meta API insight rows into the final KOL report DataFrame.
 
     Args:
-        raw_rows:       List of dicts from MetaAPIClient.get_insights()
-        fx_rates:       { "HK": 7.78, "TW": 32.5 }
-                        Amount Spent (USD) = Amount Spent (local currency) / FX Rate
-        page_name_map:  { ad_id: page_name } from MetaAPIClient.get_page_names_for_ads()
-                        If None or empty, Page Name column will be blank.
+        raw_rows:          List of dicts from MetaAPIClient.get_insights()
+        fx_rates:          { "HK": 7.78, "TW": 32.5 }
+        page_name_map:     { ad_id: page_name }
+        creative_info_map: { ad_id: { "page_id", "image_url", "video_id" } }
+        video_url_map:     { video_id: permalink_url }
+        story_id_map:      { ad_id: effective_object_story_id }
     """
     if not raw_rows:
         logger.warning("transform() received empty raw_rows")
@@ -292,10 +296,37 @@ def transform(
 
     df = pd.DataFrame([flatten_row(r) for r in raw_rows])
 
-    # Apply page names from lookup map (overrides the empty string from flatten_row)
+    # Apply page names
     if page_name_map:
         df["Page Name"] = df["Ad ID"].astype(str).map(page_name_map).fillna("")
-    # else: Page Name stays as "" from flatten_row
+
+    # Post URL from effective_object_story_id: {page_id}_{post_id}
+    def build_post_url(ad_id: str) -> str:
+        if not story_id_map:
+            return ""
+        story_id = story_id_map.get(str(ad_id), "")
+        if story_id and "_" in str(story_id):
+            parts = str(story_id).split("_", 1)
+            if len(parts) == 2 and parts[1] != "0":
+                return f"https://www.facebook.com/{parts[0]}/posts/{parts[1]}"
+        return ""
+
+    df["Post URL"] = df["Ad ID"].astype(str).apply(build_post_url)
+
+    # Creative Image URL and Video URL from creative_info_map + video_url_map
+    def get_image_url(ad_id: str) -> str:
+        if not creative_info_map:
+            return ""
+        return creative_info_map.get(str(ad_id), {}).get("image_url", "")
+
+    def get_video_url(ad_id: str) -> str:
+        if not creative_info_map or not video_url_map:
+            return ""
+        vid = creative_info_map.get(str(ad_id), {}).get("video_id", "")
+        return video_url_map.get(vid, "") if vid else ""
+
+    df["Creative Image URL"] = df["Ad ID"].astype(str).apply(get_image_url)
+    df["Creative Video URL"] = df["Ad ID"].astype(str).apply(get_video_url)
 
     df["Day"]   = pd.to_datetime(df["Day"], errors="coerce")
     df["Market"]= df["Ad Account Name"].apply(get_market_from_account)
@@ -359,7 +390,8 @@ OUTPUT_COLUMNS = [
     "Campaign ID", "Campaign Name",
     "Ad Set ID", "Ad Set Name",
     "Ad ID", "Ad Name",
-    "Page Name", "Platform", "Placement",
+    "Page Name", "Post URL", "Creative Image URL", "Creative Video URL",
+    "Platform", "Placement",
     "Campaign Start Date", "Campaign End Date", "Campaign Budget",
     "Amount Spent (local currency)", "Amount Spent (USD)",
     "Impressions", "Link Clicks", "Outbound Clicks",
