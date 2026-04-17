@@ -40,13 +40,14 @@ SHEET_NAME    = "CPAS Data"
 
 # Meta insights fields to request
 INSIGHT_FIELDS = [
-    "account_name",
+    "account_name", "ad_id",
     "campaign_name", "adset_name", "ad_name",
     "spend", "reach", "frequency", "impressions",
     "cpm", "cpc", "ctr",
     "actions", "action_values", "purchase_roas",
     "catalog_segment_actions", "catalog_segment_value",
     "date_start", "date_stop",
+    "effective_object_story_id",
 ]
 
 
@@ -91,7 +92,35 @@ def fetch_market(market: str, date_start: str, date_stop: str, pa: PowerAutomate
         logger.warning(f"[{market}] No data returned")
         return pd.DataFrame(columns=OUTPUT_COLUMNS)
 
-    return transform(all_rows)
+    # Creative info lookup (Post URL, Image URL, Video URL)
+    unique_ad_ids = list({str(r.get("ad_id", "")) for r in all_rows if r.get("ad_id")})
+    story_id_map: dict[str, str] = {}
+    for r in all_rows:
+        ad_id    = str(r.get("ad_id", ""))
+        story_id = str(r.get("effective_object_story_id", ""))
+        if ad_id and story_id and ad_id not in story_id_map:
+            story_id_map[ad_id] = story_id
+
+    creative_info_map: dict[str, dict] = {}
+    video_url_map: dict[str, str] = {}
+
+    try:
+        creative_info_map = client.get_creative_info_for_ads(unique_ad_ids)
+        # Supplement story_id_map from creative object_story_id
+        for ad_id, info in creative_info_map.items():
+            if ad_id not in story_id_map:
+                osi = info.get("object_story_id", "")
+                if osi and "_" in str(osi):
+                    story_id_map[ad_id] = osi
+                elif info.get("page_id"):
+                    story_id_map[ad_id] = f"{info['page_id']}_0"
+        video_ids = list({info["video_id"] for info in creative_info_map.values() if info.get("video_id")})
+        if video_ids:
+            video_url_map = client.get_video_urls(video_ids)
+    except Exception as e:
+        logger.warning(f"[{market}] Creative lookup failed — creative fields will be blank: {e}")
+
+    return transform(all_rows, creative_info_map=creative_info_map, video_url_map=video_url_map, story_id_map=story_id_map)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

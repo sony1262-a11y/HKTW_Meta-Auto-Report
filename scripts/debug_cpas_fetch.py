@@ -138,9 +138,48 @@ def debug_fetch_market(market: str, date_start: str, date_stop: str, pa: PowerAu
         sheet_name="Raw API Response",
     )
 
+    # ── Creative info lookup ──────────────────────────────────────────────────
+    creative_info_map: dict[str, dict] = {}
+    video_url_map: dict[str, str] = {}
+    story_id_map: dict[str, str] = {}
+    try:
+        unique_ad_ids = list({str(r.get("ad_id", "")) for r in all_flat_rows if r.get("ad_id")})
+        for r in all_flat_rows:
+            ad_id    = str(r.get("ad_id", ""))
+            story_id = str(r.get("effective_object_story_id", ""))
+            if ad_id and story_id and ad_id not in story_id_map:
+                story_id_map[ad_id] = story_id
+
+        creative_info_map = client.get_creative_info_for_ads(unique_ad_ids)
+        for ad_id, info in creative_info_map.items():
+            if ad_id not in story_id_map:
+                osi = info.get("object_story_id", "")
+                if osi and "_" in str(osi):
+                    story_id_map[ad_id] = osi
+                elif info.get("page_id"):
+                    story_id_map[ad_id] = f"{info['page_id']}_0"
+
+        video_ids = list({info["video_id"] for info in creative_info_map.values() if info.get("video_id")})
+        if video_ids:
+            video_url_map = client.get_video_urls(video_ids)
+
+        resolved_images = sum(1 for v in creative_info_map.values() if v.get("image_url"))
+        resolved_videos = sum(1 for v in video_url_map.values() if v)
+        resolved_posts  = sum(1 for v in story_id_map.values() if "_" in v and not v.endswith("_0"))
+        logger.info(f"[{market}] Images: {resolved_images}/{len(unique_ad_ids)} | "
+                    f"Videos: {resolved_videos}/{len(video_ids) if video_ids else 0} | "
+                    f"Post URLs: {resolved_posts}/{len(unique_ad_ids)}")
+    except Exception as e:
+        logger.warning(f"[{market}] Creative lookup failed — fields will be blank: {e}")
+
     # ── Save transformed output ───────────────────────────────────────────────
     try:
-        df_transformed = transform(all_flat_rows)
+        df_transformed = transform(
+            all_flat_rows,
+            creative_info_map=creative_info_map,
+            video_url_map=video_url_map,
+            story_id_map=story_id_map,
+        )
         summary["transformed_rows"] = len(df_transformed)
         save_excel(
             df_transformed,

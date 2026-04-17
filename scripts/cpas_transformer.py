@@ -273,6 +273,7 @@ def _extract_actions(row: dict, field: str, mapping: dict) -> dict:
 def flatten_row(row: dict) -> dict:
     """Flatten a single Meta API insights row into a flat dict."""
     flat = {
+        "Ad ID":            row.get("ad_id", ""),
         "Account name":     row.get("account_name", ""),
         "Campaign name":    row.get("campaign_name", ""),
         "Ad Set Name":      row.get("adset_name", ""),
@@ -332,12 +333,20 @@ def flatten_row(row: dict) -> dict:
 # Main transformer
 # ─────────────────────────────────────────────────────────────────────────────
 
-def transform(raw_rows: list[dict]) -> pd.DataFrame:
+def transform(
+    raw_rows: list[dict],
+    creative_info_map: dict[str, dict] | None = None,
+    video_url_map: dict[str, str] | None = None,
+    story_id_map: dict[str, str] | None = None,
+) -> pd.DataFrame:
     """
     Transform raw Meta API insight rows into the final CPAS report DataFrame.
 
     Args:
-        raw_rows: List of dicts from MetaAPIClient.get_insights()
+        raw_rows:          List of dicts from MetaAPIClient.get_insights()
+        creative_info_map: { ad_id: { "page_id", "object_story_id", "image_url", "video_id" } }
+        video_url_map:     { video_id: permalink_url }
+        story_id_map:      { ad_id: effective_object_story_id or object_story_id }
 
     Returns:
         DataFrame with all required columns in final output order.
@@ -364,7 +373,7 @@ def transform(raw_rows: list[dict]) -> pd.DataFrame:
     df["Campaign"]      = df["Campaign name"].apply(get_campaign)
     df["Optimization"]  = df["Campaign name"].apply(get_optimization)
 
-    df["TA#"]           = ""   # reserved — populated manually
+    df["TA#"]           = ""
     df["TA Name"]       = df["Ad Set Name"].apply(get_ta_name)
 
     df["Creative Name"] = df["Ad name"].apply(get_creative_name)
@@ -375,12 +384,37 @@ def transform(raw_rows: list[dict]) -> pd.DataFrame:
     df["Objective"]     = "PRODUCT_CATALOG_SALES"
     df["Channel"]       = df["Account name"].apply(get_channel)
 
-    # Category & Funding Source — both = _AN~..._CN~ value in Campaign Name
     an_value            = df["Campaign name"].apply(get_an_value)
     df["Category"]      = an_value
     df["Funding Source"]= an_value
 
-    # 4. Final column order
+    # 4. Creative link columns
+    def build_post_url(ad_id: str) -> str:
+        if not story_id_map:
+            return ""
+        sid = story_id_map.get(str(ad_id), "")
+        if sid and "_" in str(sid):
+            parts = str(sid).split("_", 1)
+            if len(parts) == 2 and parts[1] != "0":
+                return f"https://www.facebook.com/{parts[0]}/posts/{parts[1]}"
+        return ""
+
+    def get_image_url(ad_id: str) -> str:
+        if not creative_info_map:
+            return ""
+        return creative_info_map.get(str(ad_id), {}).get("image_url", "")
+
+    def get_video_url(ad_id: str) -> str:
+        if not creative_info_map or not video_url_map:
+            return ""
+        vid = creative_info_map.get(str(ad_id), {}).get("video_id", "")
+        return video_url_map.get(vid, "") if vid else ""
+
+    df["Post URL"]            = df["Ad ID"].astype(str).apply(build_post_url)
+    df["Creative Image URL"]  = df["Ad ID"].astype(str).apply(get_image_url)
+    df["Creative Video URL"]  = df["Ad ID"].astype(str).apply(get_video_url)
+
+    # 5. Final column order
     df = df[OUTPUT_COLUMNS]
 
     logger.info(f"transform() complete: {len(df)} rows, {len(df.columns)} columns")
@@ -420,6 +454,9 @@ OUTPUT_COLUMNS = [
     "Campaign name",
     "Ad Set Name",
     "Ad name",
+    "Post URL",
+    "Creative Image URL",
+    "Creative Video URL",
     "Amount spent",
     "Reach",
     "Frequency",

@@ -401,7 +401,10 @@ class MetaAPIClient:
                         continue
                     try:
                         body = json.loads(item["body"])
-                        result[vid] = body.get("permalink_url", "")
+                        url  = body.get("permalink_url", "")
+                        if url and url.startswith("/"):
+                            url = f"https://www.facebook.com{url}"
+                        result[vid] = url
                     except Exception:
                         result[vid] = ""
 
