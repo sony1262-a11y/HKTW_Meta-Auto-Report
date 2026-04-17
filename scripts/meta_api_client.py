@@ -433,7 +433,11 @@ class MetaAPIClient:
                     "method":       "GET",
                     "relative_url": (
                         f"{ad_id}?fields=creative{{"
-                        f"object_story_spec{{page_id}},"
+                        f"object_story_spec{{"
+                        f"page_id,"
+                        f"link_data{{video_id,picture}},"
+                        f"video_data{{video_id,image_url}}"
+                        f"}},"
                         f"object_story_id,"
                         f"image_url,"
                         f"video_id"
@@ -467,15 +471,32 @@ class MetaAPIClient:
                         creative = body.get("creative", {})
                         if j == 0 and i == 0:
                             logger.info(f"[{self.market}] creative API sample body: {str(body)[:300]}")
-                        page_id        = creative.get("object_story_spec", {}).get("page_id", "")
-                        object_story_id= creative.get("object_story_id", "")
-                        image_url      = creative.get("image_url", "")
-                        video_id       = str(creative.get("video_id", "")) if creative.get("video_id") else ""
+
+                        oss     = creative.get("object_story_spec", {})
+                        page_id = oss.get("page_id", "")
+                        object_story_id = creative.get("object_story_id", "")
+
+                        # image_url: top-level → video_data.image_url → link_data.picture
+                        image_url = (
+                            creative.get("image_url", "") or
+                            oss.get("video_data", {}).get("image_url", "") or
+                            oss.get("link_data", {}).get("picture", "")
+                        )
+
+                        # video_id: top-level → link_data (Collection/Carousel cover GIF)
+                        #           → video_data (Video ad)
+                        raw_vid = (
+                            creative.get("video_id") or
+                            oss.get("link_data", {}).get("video_id") or
+                            oss.get("video_data", {}).get("video_id")
+                        )
+                        video_id = str(raw_vid) if raw_vid else ""
+
                         result[ad_id] = {
-                            "page_id":          str(page_id) if page_id else "",
-                            "object_story_id":  str(object_story_id) if object_story_id else "",
-                            "image_url":        image_url,
-                            "video_id":         video_id,
+                            "page_id":         str(page_id) if page_id else "",
+                            "object_story_id": str(object_story_id) if object_story_id else "",
+                            "image_url":       image_url,
+                            "video_id":        video_id,
                         }
                         if page_id:
                             page_ids_found += 1
