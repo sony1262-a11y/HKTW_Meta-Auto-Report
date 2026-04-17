@@ -37,6 +37,7 @@ from scripts.cpas_transformer import (
     get_channel as get_cpas_channel,
     CATALOG_ACTION_MAP,
     CATALOG_VALUE_MAP,
+    ROAS_MAP,
 )
 
 logger = logging.getLogger(__name__)
@@ -130,11 +131,14 @@ def flatten_row(row: dict) -> dict:
             except (ValueError, TypeError):
                 pass
 
-    # Purchase ROAS (CPAS)
+    # Purchase ROAS (CPAS) — zero-fill all ROAS columns first
+    for col in set(ROAS_MAP.values()):
+        flat[col] = 0.0
     for item in row.get("purchase_roas", []):
-        if item.get("action_type") == "omni_purchase":
+        atype = item.get("action_type", "")
+        if atype in ROAS_MAP:
             try:
-                flat["Purchase ROAS for shared items only"] = float(item.get("value", 0))
+                flat[ROAS_MAP[atype]] = float(item.get("value", 0))
             except (ValueError, TypeError):
                 pass
 
