@@ -418,7 +418,87 @@ class MetaAPIClient:
         logger.info(f"[{self.market}] get_video_urls: {resolved}/{len(unique_ids)} URLs resolved")
         return result
 
-    def _batch_get_creative_info(self, ad_ids: list[str]) -> dict[str, dict]:
+    def get_post_media(self, story_ids: list[str]) -> dict[str, dict]:
+        """
+        Batch query post attachments via object_story_id (format: {page_id}_{post_id}).
+        Used as fallback when creative API returns no image_url or video_id.
+
+        Returns { story_id: { "image_url": str, "video_url": str } }
+        """
+        unique_ids = [s for s in story_ids if s and "_" in str(s) and not str(s).endswith("_0")]
+        if not unique_ids:
+            return {}
+
+        logger.info(f"[{self.market}] Fetching post media for {len(unique_ids)} posts (fallback)...")
+        result: dict[str, dict] = {}
+
+        for i in range(0, len(unique_ids), self.BATCH_SIZE):
+            chunk = unique_ids[i:i + self.BATCH_SIZE]
+            batch = [
+                {
+                    "method":       "GET",
+                    "relative_url": f"{story_id}?fields=attachments{{media,subattachments{{media}}}}",
+                }
+                for story_id in chunk
+            ]
+            try:
+                resp = requests.post(
+                    f"{META_API_BASE}/",
+                    data={"access_token": self.access_token, "batch": json.dumps(batch)},
+                    timeout=60,
+                )
+                resp.raise_for_status()
+                responses = resp.json()
+
+                for j, item in enumerate(responses):
+                    story_id = chunk[j]
+                    empty_media = {"image_url": "", "video_url": ""}
+                    if not item or item.get("code") != 200:
+                        result[story_id] = empty_media
+                        continue
+                    try:
+                        body        = json.loads(item["body"])
+                        attachments = body.get("attachments", {}).get("data", [])
+                        image_url   = ""
+                        video_url   = ""
+
+                        for att in attachments:
+                            media = att.get("media", {})
+                            # Image/GIF
+                            if not image_url and media.get("image", {}).get("src"):
+                                image_url = media["image"]["src"]
+                            # Video
+                            if not video_url and media.get("video_id"):
+                                vid = media["video_id"]
+                                video_url = f"https://www.facebook.com/video/{vid}/"
+                            # Check subattachments (Carousel first card)
+                            for sub in att.get("subattachments", {}).get("data", []):
+                                sub_media = sub.get("media", {})
+                                if not image_url and sub_media.get("image", {}).get("src"):
+                                    image_url = sub_media["image"]["src"]
+                                if not video_url and sub_media.get("video_id"):
+                                    vid = sub_media["video_id"]
+                                    video_url = f"https://www.facebook.com/video/{vid}/"
+
+                        result[story_id] = {"image_url": image_url, "video_url": video_url}
+                    except Exception:
+                        result[story_id] = empty_media
+
+                time.sleep(0.5)
+            except Exception as e:
+                logger.warning(f"[{self.market}] Batch post media lookup failed (chunk {i}): {e}")
+                for story_id in chunk:
+                    result[story_id] = {"image_url": "", "video_url": ""}
+
+        resolved_img = sum(1 for v in result.values() if v.get("image_url"))
+        resolved_vid = sum(1 for v in result.values() if v.get("video_url"))
+        logger.info(
+            f"[{self.market}] get_post_media: "
+            f"{resolved_img}/{len(unique_ids)} images, {resolved_vid}/{len(unique_ids)} videos resolved"
+        )
+        return result
+
+
         """
         Batch query: ad_id → { page_id, image_url, video_id }
         Fetches all creative fields in one pass.

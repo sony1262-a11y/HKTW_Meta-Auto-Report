@@ -195,6 +195,28 @@ def fetch_market(
         if video_ids:
             video_url_map = client.get_video_urls(video_ids)
 
+        # Fallback: for ads with no image_url and no video_id, query post attachments
+        missing_media = [
+            ad_id for ad_id in unique_ad_ids
+            if not creative_info_map.get(ad_id, {}).get("image_url")
+            and not creative_info_map.get(ad_id, {}).get("video_id")
+            and story_id_map.get(ad_id, "")
+        ]
+        if missing_media:
+            missing_story_ids = list({story_id_map[a] for a in missing_media if story_id_map.get(a)})
+            post_media = client.get_post_media(missing_story_ids)
+            # Merge results back into creative_info_map
+            for ad_id in missing_media:
+                sid = story_id_map.get(ad_id, "")
+                if sid and sid in post_media:
+                    m = post_media[sid]
+                    if m.get("image_url"):
+                        creative_info_map[ad_id]["image_url"] = m["image_url"]
+                    if m.get("video_url"):
+                        creative_info_map[ad_id]["video_id"] = "__post__"
+                        video_url_map[f"__post__{sid}"] = m["video_url"]
+                        creative_info_map[ad_id]["video_id"] = f"__post__{sid}"
+
     except Exception as e:
         logger.warning(f"[{market}] Creative/page lookup failed — fields will be blank: {e}")
 

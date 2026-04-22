@@ -22,7 +22,7 @@ from scripts.all_report import (
     INSIGHT_FIELDS, BREAKDOWN_MAP,
     SP_FOLDER, SHEET_NAME,
     load_fx_rates, load_existing, merge_and_deduplicate, save_to_excel,
-    _output_filename,
+    _output_filename, monthly_chunks,
 )
 from scripts.power_automate_client import PowerAutomateClient
 from scripts.account_loader import load_accounts
@@ -81,35 +81,42 @@ def debug_fetch_market(
     all_raw_rows  = []
     all_full_rows = []
 
+    chunks = monthly_chunks(date_start, date_stop)
+    if len(chunks) > 1:
+        logger.info(f"[{market}] Date range spans {len(chunks)} months — fetching month by month")
+
     for acct in accounts:
         acct_id   = acct["id"]
         acct_name = acct["name"]
-        try:
-            rows = client.get_insights(
-                ad_account_id  = acct_id,
-                date_start     = date_start,
-                date_stop      = date_stop,
-                level          = "ad",
-                fields         = INSIGHT_FIELDS,
-                breakdowns     = breakdowns,
-                time_increment = time_increment,
-            )
-            logger.info(f"[{market}] {acct_name}: {len(rows)} rows")
+        acct_rows = []
+        for chunk_start, chunk_end in chunks:
+            try:
+                rows = client.get_insights(
+                    ad_account_id  = acct_id,
+                    date_start     = chunk_start,
+                    date_stop      = chunk_end,
+                    level          = "ad",
+                    fields         = INSIGHT_FIELDS,
+                    breakdowns     = breakdowns,
+                    time_increment = time_increment,
+                )
+                acct_rows.extend(rows)
+            except Exception as e:
+                msg = f"[{market}] Error {acct_id} ({acct_name}) [{chunk_start}~{chunk_end}]: {e}"
+                logger.error(msg)
+                summary["errors"].append(msg)
 
-            for r in rows:
-                flat_raw = {k: v for k, v in r.items() if not isinstance(v, list)}
-                flat_raw["_actions_json"]                 = json.dumps(r.get("actions", []))
-                flat_raw["_catalog_segment_actions_json"] = json.dumps(r.get("catalog_segment_actions", []))
-                flat_raw["_catalog_segment_value_json"]   = json.dumps(r.get("catalog_segment_value", []))
-                flat_raw["_purchase_roas_json"]           = json.dumps(r.get("purchase_roas", []))
-                all_raw_rows.append(flat_raw)
+        for r in acct_rows:
+            flat_raw = {k: v for k, v in r.items() if not isinstance(v, list)}
+            flat_raw["_actions_json"]                 = json.dumps(r.get("actions", []))
+            flat_raw["_catalog_segment_actions_json"] = json.dumps(r.get("catalog_segment_actions", []))
+            flat_raw["_catalog_segment_value_json"]   = json.dumps(r.get("catalog_segment_value", []))
+            flat_raw["_purchase_roas_json"]           = json.dumps(r.get("purchase_roas", []))
+            all_raw_rows.append(flat_raw)
 
-            all_full_rows.extend(rows)
-
-        except Exception as e:
-            msg = f"[{market}] Error {acct_id} ({acct_name}): {e}"
-            logger.error(msg)
-            summary["errors"].append(msg)
+        all_full_rows.extend(acct_rows)
+        if acct_rows:
+            logger.info(f"[{market}] {acct_name}: {len(acct_rows)} rows")
 
     summary["raw_rows"] = len(all_full_rows)
 
@@ -144,6 +151,27 @@ def debug_fetch_market(
         video_ids = list({info["video_id"] for info in creative_info_map.values() if info.get("video_id")})
         if video_ids:
             video_url_map = client.get_video_urls(video_ids)
+
+        # Fallback: query post attachments for ads missing both image and video
+        missing_media = [
+            ad_id for ad_id in unique_ad_ids
+            if not creative_info_map.get(ad_id, {}).get("image_url")
+            and not creative_info_map.get(ad_id, {}).get("video_id")
+            and story_id_map.get(ad_id, "")
+        ]
+        if missing_media:
+            missing_story_ids = list({story_id_map[a] for a in missing_media if story_id_map.get(a)})
+            post_media = client.get_post_media(missing_story_ids)
+            for ad_id in missing_media:
+                sid = story_id_map.get(ad_id, "")
+                if sid and sid in post_media:
+                    m = post_media[sid]
+                    if m.get("image_url"):
+                        creative_info_map[ad_id]["image_url"] = m["image_url"]
+                    if m.get("video_url"):
+                        key = f"__post__{sid}"
+                        creative_info_map[ad_id]["video_id"] = key
+                        video_url_map[key] = m["video_url"]
 
         resolved_posts  = sum(1 for v in story_id_map.values() if "_" in v and not v.endswith("_0"))
         resolved_pages  = sum(1 for v in page_name_map.values() if v)

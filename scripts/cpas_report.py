@@ -111,6 +111,27 @@ def fetch_market(market: str, date_start: str, date_stop: str, pa: PowerAutomate
         video_ids = list({info["video_id"] for info in creative_info_map.values() if info.get("video_id")})
         if video_ids:
             video_url_map = client.get_video_urls(video_ids)
+
+        # Fallback: for ads with no image_url and no video_id, query post attachments
+        missing_media = [
+            ad_id for ad_id in unique_ad_ids
+            if not creative_info_map.get(ad_id, {}).get("image_url")
+            and not creative_info_map.get(ad_id, {}).get("video_id")
+            and story_id_map.get(ad_id, "")
+        ]
+        if missing_media:
+            missing_story_ids = list({story_id_map[a] for a in missing_media if story_id_map.get(a)})
+            post_media = client.get_post_media(missing_story_ids)
+            for ad_id in missing_media:
+                sid = story_id_map.get(ad_id, "")
+                if sid and sid in post_media:
+                    m = post_media[sid]
+                    if m.get("image_url"):
+                        creative_info_map[ad_id]["image_url"] = m["image_url"]
+                    if m.get("video_url"):
+                        key = f"__post__{sid}"
+                        creative_info_map[ad_id]["video_id"] = key
+                        video_url_map[key] = m["video_url"]
     except Exception as e:
         logger.warning(f"[{market}] Creative lookup failed — creative fields will be blank: {e}")
 

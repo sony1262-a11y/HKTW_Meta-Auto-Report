@@ -15,7 +15,8 @@ import sys
 import io
 import logging
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, date
+from dateutil.relativedelta import relativedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -71,8 +72,32 @@ DEDUPE_KEYS_NONE       = ["Ad Account ID", "Ad ID", "Date"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FX Rate loader
+# Date range chunking
 # ─────────────────────────────────────────────────────────────────────────────
+
+def monthly_chunks(date_start: str, date_stop: str) -> list[tuple[str, str]]:
+    """
+    Split a date range into monthly chunks.
+    e.g. 2025-07-01 → 2025-09-30 → [(2025-07-01, 2025-07-31), (2025-08-01, 2025-08-31), (2025-09-01, 2025-09-30)]
+    Returns a single chunk if range is within one calendar month.
+    """
+    start = date.fromisoformat(date_start)
+    stop  = date.fromisoformat(date_stop)
+
+    # Same month — no split needed
+    if start.year == stop.year and start.month == stop.month:
+        return [(date_start, date_stop)]
+
+    chunks = []
+    cur = start
+    while cur <= stop:
+        # Last day of current month
+        month_end = (cur + relativedelta(months=1)) - relativedelta(days=1)
+        chunk_end = min(month_end, stop)
+        chunks.append((cur.isoformat(), chunk_end.isoformat()))
+        cur = chunk_end + relativedelta(days=1)
+
+    return chunks
 
 def load_fx_rates(pa: PowerAutomateClient) -> dict[str, float]:
     logger.info(f"Loading FX rates from SharePoint: {FX_FILE}")
@@ -125,24 +150,33 @@ def fetch_market(
     client   = MetaAPIClient(market)
     all_rows = []
 
+    # Split into monthly chunks to avoid Meta 500 "too much data" errors
+    chunks = monthly_chunks(date_start, date_stop)
+    if len(chunks) > 1:
+        logger.info(f"[{market}] Date range spans {len(chunks)} months — fetching month by month")
+
     for acct in accounts:
         acct_id   = acct["id"]
         acct_name = acct["name"]
-        try:
-            rows = client.get_insights(
-                ad_account_id  = acct_id,
-                date_start     = date_start,
-                date_stop      = date_stop,
-                level          = "ad",
-                fields         = INSIGHT_FIELDS,
-                breakdowns     = breakdowns,
-                time_increment = time_increment,
-            )
-            all_rows.extend(rows)
-            logger.info(f"[{market}] {acct_name}: {len(rows)} rows")
-        except Exception as e:
-            logger.error(f"[{market}] Error fetching {acct_id} ({acct_name}): {e}")
-            continue
+        acct_rows = []
+        for chunk_start, chunk_end in chunks:
+            try:
+                rows = client.get_insights(
+                    ad_account_id  = acct_id,
+                    date_start     = chunk_start,
+                    date_stop      = chunk_end,
+                    level          = "ad",
+                    fields         = INSIGHT_FIELDS,
+                    breakdowns     = breakdowns,
+                    time_increment = time_increment,
+                )
+                acct_rows.extend(rows)
+            except Exception as e:
+                logger.error(f"[{market}] Error fetching {acct_id} ({acct_name}) [{chunk_start}~{chunk_end}]: {e}")
+                continue
+        all_rows.extend(acct_rows)
+        if acct_rows:
+            logger.info(f"[{market}] {acct_name}: {len(acct_rows)} rows")
 
     if not all_rows:
         logger.warning(f"[{market}] No data returned")
@@ -169,6 +203,27 @@ def fetch_market(
         video_ids = list({info["video_id"] for info in creative_info_map.values() if info.get("video_id")})
         if video_ids:
             video_url_map = client.get_video_urls(video_ids)
+
+        # Fallback: for ads with no image_url and no video_id, query post attachments
+        missing_media = [
+            ad_id for ad_id in unique_ad_ids
+            if not creative_info_map.get(ad_id, {}).get("image_url")
+            and not creative_info_map.get(ad_id, {}).get("video_id")
+            and story_id_map.get(ad_id, "")
+        ]
+        if missing_media:
+            missing_story_ids = list({story_id_map[a] for a in missing_media if story_id_map.get(a)})
+            post_media = client.get_post_media(missing_story_ids)
+            for ad_id in missing_media:
+                sid = story_id_map.get(ad_id, "")
+                if sid and sid in post_media:
+                    m = post_media[sid]
+                    if m.get("image_url"):
+                        creative_info_map[ad_id]["image_url"] = m["image_url"]
+                    if m.get("video_url"):
+                        key = f"__post__{sid}"
+                        creative_info_map[ad_id]["video_id"] = key
+                        video_url_map[key] = m["video_url"]
 
         logger.info(
             f"[{market}] Pages: {sum(1 for v in page_name_map.values() if v)}/{len(unique_ad_ids)} | "
