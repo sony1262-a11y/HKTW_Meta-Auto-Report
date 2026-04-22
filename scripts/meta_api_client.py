@@ -498,7 +498,7 @@ class MetaAPIClient:
         )
         return result
 
-
+    def _batch_get_creative_info(self, ad_ids: list[str]) -> dict[str, dict]:
         """
         Batch query: ad_id → { page_id, image_url, video_id }
         Fetches all creative fields in one pass.
@@ -556,18 +556,20 @@ class MetaAPIClient:
                         page_id = oss.get("page_id", "")
                         object_story_id = creative.get("object_story_id", "")
 
-                        # image_url: top-level → video_data.image_url → link_data.picture (Collection cover)
+                        # image_url: top-level → video_data.image_url → link_data.picture
                         image_url = (
                             creative.get("image_url", "") or
                             oss.get("video_data", {}).get("image_url", "") or
                             oss.get("link_data", {}).get("picture", "")
                         )
 
-                        # video_id: top-level → video_data.video_id (Video ad)
-                        # Note: Collection cover GIF uses video_id at top level if it's a video asset
+                        # video_id priority:
+                        # 1. video_data.video_id — KOL/EC video ads (most reliable asset ID)
+                        # 2. top-level creative.video_id — fallback
+                        # Note: CPAS Collection has neither; handled by get_post_media fallback
                         raw_vid = (
-                            creative.get("video_id") or
-                            oss.get("video_data", {}).get("video_id")
+                            oss.get("video_data", {}).get("video_id") or
+                            creative.get("video_id")
                         )
                         video_id = str(raw_vid) if raw_vid else ""
 
@@ -593,6 +595,50 @@ class MetaAPIClient:
 
         total_page_ids = sum(1 for v in result.values() if v.get("page_id"))
         logger.info(f"[{self.market}] _batch_get_creative_info: {total_page_ids}/{len(ad_ids)} page_ids resolved")
+
+        # Second pass: for ads with page_id but no object_story_id and no image_url,
+        # try fetching effective_object_story_id directly from the ad node
+        # (covers CPAS Collection / Catalog ads where creative API returns no story)
+        needs_story = [
+            ad_id for ad_id in ad_ids
+            if result.get(ad_id, {}).get("page_id")
+            and not result.get(ad_id, {}).get("object_story_id")
+            and not result.get(ad_id, {}).get("image_url")
+        ]
+        if needs_story:
+            logger.info(f"[{self.market}] Fetching effective_object_story_id for {len(needs_story)} catalog ads...")
+            for i in range(0, len(needs_story), self.BATCH_SIZE):
+                chunk = needs_story[i:i + self.BATCH_SIZE]
+                batch = [
+                    {"method": "GET", "relative_url": f"{ad_id}?fields=effective_object_story_id"}
+                    for ad_id in chunk
+                ]
+                try:
+                    resp = requests.post(
+                        f"{META_API_BASE}/",
+                        data={"access_token": self.access_token, "batch": json.dumps(batch)},
+                        timeout=60,
+                    )
+                    resp.raise_for_status()
+                    responses = resp.json()
+                    found = 0
+                    for j, item in enumerate(responses):
+                        ad_id = chunk[j]
+                        if not item or item.get("code") != 200:
+                            continue
+                        try:
+                            body = json.loads(item["body"])
+                            osi  = body.get("effective_object_story_id", "")
+                            if osi and "_" in str(osi):
+                                result[ad_id]["object_story_id"] = str(osi)
+                                found += 1
+                        except Exception:
+                            pass
+                    logger.info(f"[{self.market}] effective_object_story_id pass: {found}/{len(chunk)} resolved")
+                    time.sleep(0.5)
+                except Exception as e:
+                    logger.warning(f"[{self.market}] effective_object_story_id batch failed: {e}")
+
         return result
 
     def _batch_get_page_names(self, page_ids: list[str]) -> dict[str, str]:
