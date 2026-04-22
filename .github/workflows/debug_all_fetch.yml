@@ -61,7 +61,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install requests pandas openpyxl
+        run: pip install requests pandas openpyxl python-dateutil
 
       - name: Fetch & transform All Meta data
         env:
