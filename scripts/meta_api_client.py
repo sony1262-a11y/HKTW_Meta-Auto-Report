@@ -418,7 +418,64 @@ class MetaAPIClient:
         logger.info(f"[{self.market}] get_video_urls: {resolved}/{len(unique_ids)} URLs resolved")
         return result
 
-    def get_post_media(self, story_ids: list[str]) -> dict[str, dict]:
+    def get_video_source_urls(self, video_ids: list[str]) -> dict[str, str]:
+        """
+        Batch query: video_id → direct CDN source URL (.mp4/.mov).
+        Returns { video_id: source_url }
+        Used for Creative Performance report where IT needs direct downloadable URLs.
+        Note: source URLs expire within hours — share report same day.
+        """
+        unique_ids = [str(v) for v in video_ids if v and not str(v).startswith("__post__")]
+        if not unique_ids:
+            return {}
+
+        logger.info(f"[{self.market}] Fetching video source URLs for {len(unique_ids)} unique videos...")
+        result: dict[str, str] = {}
+
+        for i in range(0, len(unique_ids), self.BATCH_SIZE):
+            chunk = unique_ids[i:i + self.BATCH_SIZE]
+            batch = [
+                {"method": "GET", "relative_url": f"{vid}?fields=source"}
+                for vid in chunk
+            ]
+            try:
+                resp = requests.post(
+                    f"{META_API_BASE}/",
+                    data={"access_token": self.access_token, "batch": json.dumps(batch)},
+                    timeout=60,
+                )
+                resp.raise_for_status()
+                responses = resp.json()
+
+                resolved = 0
+                for j, item in enumerate(responses):
+                    vid = chunk[j]
+                    if not item or item.get("code") != 200:
+                        result[vid] = ""
+                        continue
+                    try:
+                        body = json.loads(item["body"])
+                        src  = body.get("source", "")
+                        result[vid] = src
+                        if src:
+                            resolved += 1
+                    except Exception:
+                        result[vid] = ""
+
+                if i == 0:
+                    logger.info(f"[{self.market}] video source chunk 0: {resolved}/{len(chunk)} resolved")
+                time.sleep(0.5)
+
+            except Exception as e:
+                logger.warning(f"[{self.market}] Batch video source lookup failed (chunk {i}): {e}")
+                for vid in chunk:
+                    result[vid] = ""
+
+        resolved_total = sum(1 for v in result.values() if v)
+        logger.info(f"[{self.market}] get_video_source_urls: {resolved_total}/{len(unique_ids)} URLs resolved")
+        return result
+
+
         """
         Batch query post attachments via object_story_id (format: {page_id}_{post_id}).
         Used as fallback when creative API returns no image_url or video_id.
