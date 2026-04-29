@@ -99,7 +99,7 @@ def flatten_row(row: dict) -> dict:
         "Page Name":        "",
     }
 
-    # Standard action metrics
+    # Standard action metrics (from actions array)
     for col in set(ACTION_MAP.values()):
         flat[col] = 0.0
     for item in row.get("actions", []):
@@ -109,6 +109,23 @@ def flatten_row(row: dict) -> dict:
                 flat[ACTION_MAP[atype]] = flat.get(ACTION_MAP[atype], 0.0) + float(item.get("value", 0))
             except (ValueError, TypeError):
                 pass
+
+    # Video quartile + Thruplay metrics are top-level fields, not inside actions array
+    VIDEO_QUARTILE_MAP = {
+        "video_thruplay_watched_actions": "Thruplay",
+        "video_p25_watched_actions":      "View at 25%",
+        "video_p50_watched_actions":      "View at 50%",
+        "video_p75_watched_actions":      "View at 75%",
+        "video_p100_watched_actions":     "View at 100%",
+    }
+    for field, col in VIDEO_QUARTILE_MAP.items():
+        items = row.get(field, [])
+        if isinstance(items, list):
+            for item in items:
+                try:
+                    flat[col] = flat.get(col, 0.0) + float(item.get("value", 0))
+                except (ValueError, TypeError):
+                    pass
 
     # Catalog conversion metrics (CPAS only; blank for others)
     for col in set(CATALOG_ACTION_MAP.values()):

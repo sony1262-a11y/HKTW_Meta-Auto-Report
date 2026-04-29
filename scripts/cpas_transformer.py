@@ -303,6 +303,23 @@ def flatten_row(row: dict) -> dict:
     # Standard actions (video, engagement, link clicks)
     flat.update(_extract_actions(row, "actions", ACTION_MAP))
 
+    # Video quartile + Thruplay metrics are top-level fields, not inside actions array
+    _VIDEO_QUARTILE = {
+        "video_thruplay_watched_actions": "ThruPlays",
+        "video_p25_watched_actions":      "Video plays at 25%",
+        "video_p50_watched_actions":      "Video plays at 50%",
+        "video_p75_watched_actions":      "Video plays at 75%",
+        "video_p100_watched_actions":     "Video plays at 100%",
+    }
+    for field, col in _VIDEO_QUARTILE.items():
+        items = row.get(field, [])
+        if isinstance(items, list):
+            for item in items:
+                try:
+                    flat[col] = flat.get(col, 0.0) + float(item.get("value", 0))
+                except (ValueError, TypeError):
+                    pass
+
     # CPAS conversions from catalog_segment_actions / catalog_segment_value
     # Note: accumulate because multiple action_types can map to same column
     for item in row.get("catalog_segment_actions", []):
