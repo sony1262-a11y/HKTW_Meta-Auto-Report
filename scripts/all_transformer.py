@@ -8,7 +8,9 @@ from scripts.kol_transformer import (
     get_market_from_account, get_fy, get_an_value, get_boutique, get_campaign,
     get_objective_kol, get_objective, get_ta, get_creative_name, get_creative_tag,
     get_p2p, get_creative_code, get_channel_from_tag, get_creative_format,
-    get_content_type, get_kol_name_from_tag, get_category_type_and_category,
+    get_content_type, get_kol_name_from_tag,
+    get_category_type_and_category, get_category_by_boutique,
+    BOUTIQUE_DEPENDENT_BRANDS,
 )
 from scripts.cpas_transformer import (
     get_optimization, get_ta_name, get_creative_seq, get_creative_type,
@@ -185,7 +187,12 @@ def transform(
         lambda r: get_content_type(r["Ad Account Name"], r["Creative Tag"]), axis=1
     )
 
-    cat_lookup          = df["Brand"].apply(get_category_type_and_category)
+    cat_lookup = df.apply(
+        lambda r: get_category_by_boutique(r["Brand"], r["Boutique"])
+        if r["Brand"] in BOUTIQUE_DEPENDENT_BRANDS
+        else get_category_type_and_category(r["Brand"]),
+        axis=1,
+    )
     df["Category Type"] = cat_lookup.apply(lambda x: x[0])
     df["Category"]      = cat_lookup.apply(lambda x: x[1])
 

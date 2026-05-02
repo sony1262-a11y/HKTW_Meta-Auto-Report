@@ -8,37 +8,62 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 BRAND_CATEGORY_MAPPING = {
-    "Whisper":         ("Brand", "Fem Care"),
-    "Ariel":           ("Brand", "Fabric Care"),
-    "Hair Recipe":     ("Brand", "Hair Care"),
-    "Pampers":         ("Brand", "Baby Care"),
-    "Febreze":         ("Brand", "Home Care"),
-    "Lenor":           ("Brand", "Fabric Care"),
-    "Olay":            ("Brand", "Skin Care"),
-    "Oral-B":          ("Brand", "Oral Care"),
-    "Gillette":        ("Brand", "Grooming"),
-    "EC PTN":          ("EC",    "EC Hair Care"),
-    "EC Pampers":      ("EC",    "EC Baby Care"),
-    "EC HR":           ("EC",    "EC Hair Care"),
+    # ── Hair Care ────────────────────────────────
     "Pantene":         ("Brand", "Hair Care"),
-    "EC Crest":        ("EC",    "EC Oral Care"),
+    "Hair Recipe":     ("Brand", "Hair Care"),
     "Herbal Essences": ("Brand", "Hair Care"),
     "H&S":             ("Brand", "Hair Care"),
-    "EC Gillette":     ("EC",    "EC Grooming"),
-    "EC Olay":         ("EC",    "EC Skin Care"),
+    "Head & Shoulders":("Brand", "Hair Care"),
+    "Head & Shoulder": ("Brand", "Hair Care"),   # variant (no trailing s)
     "Pert":            ("Brand", "Hair Care"),
+    "VS":              ("Brand", "Hair Care"),
+    "Rejoice":         ("Brand", "Hair Care"),
+    # ── Skin Care ───────────────────────────────
+    "Olay":            ("Brand", "Skin Care"),
+    "First Aid Beauty":("",      "Skin Care"),
+    # ── Oral Care ───────────────────────────────
+    "Oral-B":          ("Brand", "Oral Care"),
+    "OralB":           ("Brand", "Oral Care"),   # variant (no dash)
+    "Oral B":          ("Brand", "Oral Care"),   # variant (space)
+    "Crest":           ("Brand", "Oral Care"),
+    # ── Fabric Care ─────────────────────────────
+    "Ariel":           ("Brand", "Fabric Care"),
+    "Lenor":           ("Brand", "Fabric Care"),
+    # ── Fem Care ────────────────────────────────
+    "Whisper":         ("Brand", "Fem Care"),
+    # ── Baby Care ───────────────────────────────
+    "Pampers":         ("Brand", "Baby Care"),
+    # ── Home Care ───────────────────────────────
+    "Febreze":         ("Brand", "Home Care"),
+    # ── Grooming ────────────────────────────────
+    "Gillette":        ("Brand", "Grooming"),
     "Braun":           ("Brand", "Grooming"),
+    # ── CBD ─────────────────────────────────────
+    "CBD":             ("Brand", "CBD"),
+    # ── EC brands ───────────────────────────────
+    "EC PTN":          ("EC",    "EC Hair Care"),
+    "EC HR":           ("EC",    "EC Hair Care"),
     "EC H&S":          ("EC",    "EC Hair Care"),
     "EC Hair Recipe":  ("EC",    "EC Hair Care"),
+    "EC Pantene":      ("EC",    "EC Hair Care"),
+    "EC Olay":         ("EC",    "EC Skin Care"),
+    "EC Oral-B":       ("EC",    "EC Oral Care"),
     "EC Ariel":        ("EC",    "EC Fabric Care"),
     "EC Lenor":        ("EC",    "EC Fabric Care"),
-    "EC Pantene":      ("EC",    "EC Hair Care"),
+    "EC Whisper":      ("EC",    "EC Fem Care"),
+    "EC Pampers":      ("EC",    "EC Baby Care"),
+    "EC Gillette":     ("EC",    "EC Grooming"),
     "EC Braun":        ("EC",    "EC Grooming"),
-    "Crest":           ("Brand", "Oral Care"),
-    "VS":              ("Brand", "Hair Care"),
-    "OralB":           ("Brand", "Oral Care"),
-    "First Aid Beauty":("",      "Skin Care"),
+    "EC Crest":        ("EC",    "EC Oral Care"),
 }
+
+# Brands where Category depends on Boutique, not Brand itself.
+# These are looked up via get_category_by_boutique() below.
+BOUTIQUE_DEPENDENT_BRANDS = {"EC Fabric Care", "EC Total Brand", "Shopper Marketing"}
+
+# Lookup table: normalised key → (Category Type, Category)
+# Built once at import time for case-insensitive matching.
+_BRAND_CATEGORY_LOOKUP = {k.lower(): v for k, v in BRAND_CATEGORY_MAPPING.items()}
 
 OBJECTIVE_MAPPING = {
     "BA-RH":  "Awareness",
@@ -140,7 +165,32 @@ def get_objective_kol(raw_ob, account_name):
     return map_objective(raw_ob)
 
 def get_category_type_and_category(brand):
-    return BRAND_CATEGORY_MAPPING.get(brand, ("", ""))
+    """Case-insensitive brand -> (Category Type, Category).
+    For boutique-dependent brands call get_category_by_boutique() instead."""
+    if not isinstance(brand, str) or not brand:
+        return ("", "")
+    return _BRAND_CATEGORY_LOOKUP.get(brand.lower(), ("", ""))
+
+
+def get_category_by_boutique(brand, boutique):
+    """Brands where Category is driven by Boutique, not Brand.
+
+    - Boutique == 'AllBrand'       -> ("EC", "EC Total Brand")
+    - Any other Boutique           -> look up boutique as a brand name,
+                                      force Category Type = "EC"
+    """
+    if not isinstance(brand, str) or brand not in BOUTIQUE_DEPENDENT_BRANDS:
+        return get_category_type_and_category(brand)
+    if not isinstance(boutique, str) or boutique.strip() == "":
+        return ("EC", "")
+    b = boutique.strip()
+    if b.lower() == "allbrand":
+        return ("EC", "EC Total Brand")
+    _, category = _BRAND_CATEGORY_LOOKUP.get(b.lower(), ("", ""))
+    # Prepend "EC " if not already present
+    if category and not category.startswith("EC "):
+        category = f"EC {category}"
+    return ("EC", category)
 
 ACTION_MAP = {
     "link_click":                 "Link Clicks",
@@ -286,7 +336,12 @@ def transform(
         lambda r: get_content_type(r["Ad Account Name"], r["Creative Tag"]), axis=1
     )
 
-    cat_lookup          = df["Brand"].apply(get_category_type_and_category)
+    cat_lookup = df.apply(
+        lambda r: get_category_by_boutique(r["Brand"], r["Boutique"])
+        if r["Brand"] in BOUTIQUE_DEPENDENT_BRANDS
+        else get_category_type_and_category(r["Brand"]),
+        axis=1,
+    )
     df["Category Type"] = cat_lookup.apply(lambda x: x[0])
     df["Category"]      = cat_lookup.apply(lambda x: x[1])
 
