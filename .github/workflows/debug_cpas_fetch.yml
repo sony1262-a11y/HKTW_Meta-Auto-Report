@@ -1,5 +1,4 @@
-name: "[DEBUG] CPAS Fetch & Inspect"
-
+name: "[DEBUG] CPAS Fetch and Inspect"
 on:
   workflow_dispatch:
     inputs:
@@ -8,10 +7,7 @@ on:
         required: true
         default: 'ALL'
         type: choice
-        options:
-          - ALL
-          - HK
-          - TW
+        options: [ALL, HK, TW]
       date_start:
         description: 'Start date (YYYY-MM-DD)'
         required: true
@@ -21,40 +17,27 @@ on:
         required: true
         type: string
       time_increment:
-        description: 'Time breakdown (1 = daily, monthly = monthly)'
+        description: 'Time breakdown'
         required: true
         default: '1'
         type: choice
-        options:
-          - '1'
-          - 'monthly'
+        options: ['1', 'monthly']
       upload_to_sharepoint:
         description: 'Upload result to SharePoint?'
         required: true
         default: 'false'
         type: choice
-        options:
-          - 'false'
-          - 'true'
-
+        options: ['false', 'true']
 jobs:
   debug-cpas:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install requests pandas openpyxl
-
-      - name: Fetch & transform CPAS data
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install requests pandas openpyxl
+      - name: Fetch and transform CPAS data
         env:
           META_HK_APP_ID:       ${{ secrets.META_HK_APP_ID }}
           META_HK_APP_SECRET:   ${{ secrets.META_HK_APP_SECRET }}
@@ -69,12 +52,10 @@ jobs:
           DATE_STOP:            ${{ github.event.inputs.date_stop }}
           TIME_INCREMENT:       ${{ github.event.inputs.time_increment }}
           UPLOAD_TO_SHAREPOINT: ${{ github.event.inputs.upload_to_sharepoint }}
-          DEBUG_MODE:           'true'
-          OUTPUT_DIR:           'debug_output'
+          OUTPUT_DIR:           debug_output
         run: |
           mkdir -p debug_output
           python scripts/debug_cpas_fetch.py
-
       - name: Upload result as artifact
         if: always()
         uses: actions/upload-artifact@v4

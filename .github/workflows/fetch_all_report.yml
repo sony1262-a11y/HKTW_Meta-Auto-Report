@@ -1,17 +1,13 @@
 name: Fetch All Meta Report
-
 on:
   workflow_dispatch:
     inputs:
       market:
-        description: 'Market to fetch (HK / TW / ALL)'
+        description: 'Market (HK / TW / ALL)'
         required: true
         default: 'ALL'
         type: choice
-        options:
-          - ALL
-          - HK
-          - TW
+        options: [ALL, HK, TW]
       date_start:
         description: 'Start date (YYYY-MM-DD)'
         required: true
@@ -21,40 +17,26 @@ on:
         required: true
         type: string
       time_increment:
-        description: 'Time breakdown (1 = daily, monthly = monthly)'
+        description: 'Time breakdown'
         required: true
         default: '1'
         type: choice
-        options:
-          - '1'
-          - 'monthly'
+        options: ['1', 'monthly']
       breakdown:
         description: 'Dimension breakdown'
         required: true
         default: 'platform_placement'
         type: choice
-        options:
-          - 'none'
-          - 'platform_placement'
-          - 'age_gender'
-
+        options: ['none', 'platform_placement', 'age_gender']
 jobs:
   fetch-all:
     runs-on: ubuntu-latest
     timeout-minutes: 90
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install requests pandas openpyxl python-dateutil
-
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install requests pandas openpyxl python-dateutil
       - name: Fetch All Meta data
         env:
           META_HK_APP_ID:       ${{ secrets.META_HK_APP_ID }}

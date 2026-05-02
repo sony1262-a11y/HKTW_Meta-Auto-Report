@@ -1,29 +1,18 @@
 name: Token Health Check
-
 on:
   workflow_dispatch:
   schedule:
-    # Every Monday 09:00 Taiwan time (01:00 UTC)
     - cron: '0 1 * * 1'
-
 jobs:
   check-tokens:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install requests openpyxl
-
-      - name: Check HK & TW token health
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install requests openpyxl
+      - name: Check tokens
         env:
           META_HK_APP_ID:       ${{ secrets.META_HK_APP_ID }}
           META_HK_APP_SECRET:   ${{ secrets.META_HK_APP_SECRET }}

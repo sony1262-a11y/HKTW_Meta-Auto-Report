@@ -1,5 +1,4 @@
 name: Fetch Creative Performance Report
-
 on:
   workflow_dispatch:
     inputs:
@@ -8,10 +7,7 @@ on:
         required: true
         default: 'ALL'
         type: choice
-        options:
-          - ALL
-          - HK
-          - TW
+        options: [ALL, HK, TW]
       date_start:
         description: 'Start date (YYYY-MM-DD)'
         required: true
@@ -25,36 +21,22 @@ on:
         required: true
         default: '1'
         type: choice
-        options:
-          - '1'
-          - 'monthly'
+        options: ['1', 'monthly']
       breakdown:
         description: 'Dimension breakdown'
         required: true
         default: 'none'
         type: choice
-        options:
-          - 'none'
-          - 'platform_placement'
-          - 'age_gender'
-
+        options: ['none', 'platform_placement', 'age_gender']
 jobs:
   fetch-creative-performance:
     runs-on: ubuntu-latest
     timeout-minutes: 90
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install requests pandas openpyxl
-
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install requests pandas openpyxl python-dateutil
       - name: Fetch Creative Performance data
         env:
           META_HK_APP_ID:       ${{ secrets.META_HK_APP_ID }}
@@ -70,11 +52,10 @@ jobs:
           DATE_STOP:            ${{ github.event.inputs.date_stop }}
           TIME_INCREMENT:       ${{ github.event.inputs.time_increment }}
           BREAKDOWN:            ${{ github.event.inputs.breakdown }}
-          OUTPUT_DIR:           'creative_output'
+          OUTPUT_DIR:           creative_output
         run: |
           mkdir -p creative_output
           python scripts/creative_performance_report.py
-
       - name: Upload report as artifact
         if: always()
         uses: actions/upload-artifact@v4
