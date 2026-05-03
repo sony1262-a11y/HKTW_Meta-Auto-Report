@@ -139,6 +139,8 @@ def _extract_actions(row, field, mapping):
     return result
 
 def flatten_row(row):
+    buying_raw = row.get("buying_type", "")
+    buying = "Reach & Frequency" if buying_raw == "RESERVED" else ("Auction" if buying_raw == "AUCTION" else buying_raw)
     flat = {
         "Ad ID":            row.get("ad_id", ""),
         "Account name":     row.get("account_name", ""),
@@ -146,6 +148,7 @@ def flatten_row(row):
         "Campaign ID":      row.get("campaign_id", ""),
         "Ad Set Name":      row.get("adset_name", ""),
         "Ad name":          row.get("ad_name", ""),
+        "Media Buying":     buying,
         "Amount spent":     float(row.get("spend", 0) or 0),
         "Reach":            int(row.get("reach", 0) or 0),
         "Impressions":      int(row.get("impressions", 0) or 0),
@@ -270,6 +273,7 @@ OUTPUT_COLUMNS = [
     "Category", "Funding Source", "Brand", "Campaign", "Optimization",
     "TA#", "TA Name", "Creative Seq.", "Creative Name", "Creative Type",
     "OB~", "Objective", "Channel",
+    "Media Buying",
     "Account name", "Campaign name", "Ad Set Name", "Ad name",
     "Post URL", "Creative Image URL", "Creative Video URL",
     "Campaign Start Date", "Campaign End Date", "Campaign Budget",

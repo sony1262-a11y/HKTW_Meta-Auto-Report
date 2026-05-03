@@ -26,6 +26,7 @@ FX_SHEET               = "FX Rates"
 INSIGHT_FIELDS = [
     "account_id", "account_name", "campaign_id", "campaign_name",
     "adset_id", "adset_name", "ad_id", "ad_name",
+    "buying_type",
     "spend", "reach", "frequency", "impressions", "cpm", "cpc", "ctr",
     "actions",
     "video_p25_watched_actions", "video_p50_watched_actions",

@@ -20,6 +20,7 @@ SHEET_NAME  = "CPAS Data"
 
 INSIGHT_FIELDS = [
     "account_name", "ad_id", "campaign_name", "campaign_id", "adset_name", "ad_name",
+    "buying_type",
     "spend", "reach", "frequency", "impressions", "cpm", "cpc", "ctr",
     "actions", "action_values", "purchase_roas",
     "video_p25_watched_actions", "video_p50_watched_actions",

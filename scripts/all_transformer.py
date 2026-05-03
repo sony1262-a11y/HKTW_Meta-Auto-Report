@@ -38,6 +38,8 @@ ACTION_MAP = {
 }
 
 def flatten_row(row):
+    buying_raw = row.get("buying_type", "")
+    buying = "Reach & Frequency" if buying_raw == "RESERVED" else ("Auction" if buying_raw == "AUCTION" else buying_raw)
     flat = {
         "Ad Account ID":    row.get("account_id", ""),
         "Ad Account Name":  row.get("account_name", ""),
@@ -47,6 +49,7 @@ def flatten_row(row):
         "Ad Set Name":      row.get("adset_name", ""),
         "Ad ID":            row.get("ad_id", ""),
         "Ad name":          row.get("ad_name", ""),
+        "Media Buying":     buying,
         "Amount spent":     float(row.get("spend", 0) or 0),
         "Reach":            int(row.get("reach", 0) or 0),
         "Frequency":        float(row.get("frequency", 0) or 0),
@@ -229,6 +232,7 @@ OUTPUT_COLUMNS = [
     "Creative Name", "Creative Tag", "Creative Code", "Creative Format",
     "Creative Seq.", "Creative Type",
     "P2P", "Content Type", "OB~",
+    "Media Buying",
     "Ad Account ID", "Ad Account Name",
     "Campaign ID", "Campaign name",
     "Ad Set ID", "Ad Set Name",
