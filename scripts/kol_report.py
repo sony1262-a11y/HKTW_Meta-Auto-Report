@@ -185,8 +185,23 @@ def main():
     logger.info(f"Total new rows: {len(new_data)}")
     existing = load_existing(pa)
     merged   = merge_and_deduplicate(existing, new_data)
+    excel_bytes = save_to_excel(merged)
+
+    # ── Save timestamped artifact locally ──
+    from datetime import datetime as _dt
+    mkt_str   = market if market != "ALL" else "HKTW"
+    timestamp = _dt.utcnow().strftime("%Y%m%d_%H%M")
+    artifact_dir  = os.environ.get("ARTIFACT_DIR", "report_output")
+    os.makedirs(artifact_dir, exist_ok=True)
+    artifact_name = f"KOL_{mkt_str}_{date_start}_{date_stop}_{timestamp}.xlsx"
+    artifact_path = os.path.join(artifact_dir, artifact_name)
+    with open(artifact_path, "wb") as f:
+        f.write(excel_bytes)
+    logger.info(f"Artifact saved: {artifact_path} ({len(merged)} rows)")
+
+    # ── Upload to SharePoint ──
     logger.info(f"Uploading {len(merged)} rows")
-    pa.upload_bytes(save_to_excel(merged), SP_FOLDER, OUTPUT_FILE)
+    pa.upload_bytes(excel_bytes, SP_FOLDER, OUTPUT_FILE)
     logger.info("KOL Report completed.")
 
 if __name__ == "__main__":

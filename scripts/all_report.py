@@ -265,8 +265,24 @@ def main():
     logger.info(f"Total new rows: {len(new_data)}")
     existing = load_existing(pa, output_file)
     merged   = merge_and_deduplicate(existing, new_data, breakdown)
+    excel_bytes = save_to_excel(merged)
+
+    # ── Save timestamped artifact locally (for GitHub Actions artifact download) ──
+    from datetime import datetime as _dt
+    mkt_str   = market if market != "ALL" else "HKTW"
+    ti_str    = "monthly" if str(time_increment) == "monthly" else "daily"
+    timestamp = _dt.utcnow().strftime("%Y%m%d_%H%M")
+    artifact_dir  = os.environ.get("ARTIFACT_DIR", "report_output")
+    os.makedirs(artifact_dir, exist_ok=True)
+    artifact_name = f"All_Meta_{mkt_str}_{date_start}_{date_stop}_{ti_str}_{breakdown}_{timestamp}.xlsx"
+    artifact_path = os.path.join(artifact_dir, artifact_name)
+    with open(artifact_path, "wb") as f:
+        f.write(excel_bytes)
+    logger.info(f"Artifact saved: {artifact_path} ({len(merged)} rows)")
+
+    # ── Upload to SharePoint (fixed filename for accumulation) ──
     logger.info(f"Uploading {len(merged)} rows -> {SP_FOLDER}/{output_file}")
-    pa.upload_bytes(save_to_excel(merged), SP_FOLDER, output_file)
+    pa.upload_bytes(excel_bytes, SP_FOLDER, output_file)
     logger.info("All Meta Report completed.")
 
 if __name__ == "__main__":
