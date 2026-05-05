@@ -97,7 +97,8 @@ def build_summary(df):
     summary_cols = [
         "Market", "Ad Account Name", "Brand", "Objective", "Campaign name",
         "Ad ID", "Ad name", "Date",
-        "Post URL", "Creative Image URL", "Creative Video URL",
+        "Post URL", "Creative Image URL",
+        "Creative Video URL (Permalink)", "Creative Video URL (Source)",
         "Campaign Start Date", "Campaign End Date", "Campaign Budget",
         "Amount spent", "Impressions", "Reach",
         "Link Clicks", "3s Views", "Thruplay",
@@ -106,7 +107,7 @@ def build_summary(df):
     summary = df[available].copy()
     def asset_status(row):
         has_img = bool(row.get("Creative Image URL",""))
-        has_vid = bool(row.get("Creative Video URL",""))
+        has_vid = bool(row.get("Creative Video URL (Permalink)","") or row.get("Creative Video URL (Source)",""))
         if has_img and has_vid: return "image + video"
         if has_img: return "image only"
         if has_vid: return "video only"

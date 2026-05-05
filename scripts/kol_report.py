@@ -81,7 +81,10 @@ def fetch_market(market, date_start, date_stop, fx_rates, pa, time_increment=1):
             all_rows.extend(rows)
             if rows: logger.info(f"[{market}] {acct['name']}: {len(rows)} rows")
         except Exception as e:
-            logger.error(f"[{market}] Error {acct['id']}: {e}")
+            if "3018" in str(e):
+                logger.warning(f"[{market}] Skipping {acct['id']} (beyond 37-month limit)")
+            else:
+                logger.error(f"[{market}] Error {acct['id']}: {e}")
 
     if not all_rows:
         return pd.DataFrame(columns=OUTPUT_COLUMNS)

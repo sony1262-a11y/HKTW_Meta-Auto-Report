@@ -230,15 +230,20 @@ class MetaAPIClient:
         logger.info(f"[{self.market}] Fetching creative info for {len(unique_ids)} unique ads...")
         return self._batch_get_creative_info(unique_ids)
 
-    def get_video_urls(self, video_ids: list[str]) -> dict[str, str]:
-        unique_ids = list(set(str(v) for v in video_ids if v))
+    def get_video_urls(self, video_ids: list[str]) -> dict[str, dict]:
+        """
+        Fetch both permalink URL (stable, facebook.com domain) and
+        source URL (direct CDN .mp4, expires within hours) for each video.
+        Returns { video_id: {"permalink": str, "source": str} }
+        """
+        unique_ids = list(set(str(v) for v in video_ids if v and not str(v).startswith("__post__")))
         if not unique_ids:
             return {}
-        logger.info(f"[{self.market}] Fetching video URLs for {len(unique_ids)} unique videos...")
-        result: dict[str, str] = {}
+        logger.info(f"[{self.market}] Fetching video URLs (permalink+source) for {len(unique_ids)} unique videos...")
+        result: dict[str, dict] = {}
         for i in range(0, len(unique_ids), self.BATCH_SIZE):
             chunk = unique_ids[i:i + self.BATCH_SIZE]
-            batch = [{"method": "GET", "relative_url": f"{vid}?fields=permalink_url"} for vid in chunk]
+            batch = [{"method": "GET", "relative_url": f"{vid}?fields=permalink_url,source"} for vid in chunk]
             try:
                 resp = requests.post(
                     f"{META_API_BASE}/",
@@ -250,23 +255,28 @@ class MetaAPIClient:
                 for j, item in enumerate(responses):
                     vid = chunk[j]
                     if not item or item.get("code") != 200:
-                        result[vid] = ""
+                        result[vid] = {"permalink": "", "source": ""}
                         continue
                     try:
-                        body = json.loads(item["body"])
-                        url  = body.get("permalink_url", "")
-                        if url and url.startswith("/"):
-                            url = f"https://www.facebook.com{url}"
-                        result[vid] = url
+                        body      = json.loads(item["body"])
+                        permalink = body.get("permalink_url", "")
+                        if permalink and permalink.startswith("/"):
+                            permalink = f"https://www.facebook.com{permalink}"
+                        source = body.get("source", "")
+                        result[vid] = {"permalink": permalink, "source": source}
                     except Exception:
-                        result[vid] = ""
+                        result[vid] = {"permalink": "", "source": ""}
                 time.sleep(0.5)
             except Exception as e:
                 logger.warning(f"[{self.market}] Batch video URL lookup failed (chunk {i}): {e}")
                 for vid in chunk:
-                    result[vid] = ""
-        resolved = sum(1 for v in result.values() if v)
-        logger.info(f"[{self.market}] get_video_urls: {resolved}/{len(unique_ids)} URLs resolved")
+                    result[vid] = {"permalink": "", "source": ""}
+        resolved_pl = sum(1 for v in result.values() if v.get("permalink"))
+        resolved_src = sum(1 for v in result.values() if v.get("source"))
+        logger.info(
+            f"[{self.market}] get_video_urls: "
+            f"permalink={resolved_pl}/{len(unique_ids)}, source={resolved_src}/{len(unique_ids)}"
+        )
         return result
 
     def get_video_source_urls(self, video_ids: list[str]) -> dict[str, str]:
@@ -392,6 +402,7 @@ class MetaAPIClient:
                     "method":       "GET",
                     "relative_url": (
                         f"{ad_id}?fields=creative{{"
+                        f"actor_id,"            # Page ID for ALL ad types incl. dark posts
                         f"object_story_spec{{"
                         f"page_id,"
                         f"link_data{{picture}},"
@@ -430,7 +441,13 @@ class MetaAPIClient:
                         if j == 0 and i == 0:
                             logger.info(f"[{self.market}] creative API sample body: {str(body)[:300]}")
                         oss     = creative.get("object_story_spec", {})
-                        page_id = oss.get("page_id", "")
+                        # actor_id is the authoritative Page ID for all ad types
+                        # (dark posts, video ads, catalog ads all populate actor_id)
+                        # object_story_spec.page_id only works for page post boosts
+                        page_id = (
+                            creative.get("actor_id") or
+                            oss.get("page_id", "")
+                        )
                         object_story_id = creative.get("object_story_id", "")
                         image_url = (
                             creative.get("image_url", "") or

@@ -51,8 +51,11 @@ def debug_fetch_market(market, date_start, date_stop, fx_rates, pa, time_increme
                 all_raw_rows.append(flat_raw)
             all_full_rows.extend(rows)
         except Exception as e:
-            msg = f"[{market}] Error {acct['id']}: {e}"
-            logger.error(msg); summary["errors"].append(msg)
+            if "3018" in str(e):
+                logger.warning(f"[{market}] Skipping {acct['id']} (beyond 37-month limit)")
+            else:
+                msg = f"[{market}] Error {acct['id']}: {e}"
+                logger.error(msg); summary["errors"].append(msg)
 
     summary["raw_rows"] = len(all_raw_rows)
     if not all_raw_rows:

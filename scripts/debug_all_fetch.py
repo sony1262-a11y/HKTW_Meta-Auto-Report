@@ -58,8 +58,12 @@ def debug_fetch_market(market, date_start, date_stop, fx_rates, pa, time_increme
                 acct_rows.extend(rows)
             except Exception as e:
                 msg = f"[{market}] Error {acct['id']} [{chunk_start}~{chunk_end}]: {e}"
-                logger.error(msg)
-                summary["errors"].append(msg)
+                # code=3018: date range exceeds Meta's 37-month limit — expected, not a real error
+                if "3018" in str(e):
+                    logger.warning(f"[{market}] Skipping {chunk_start}~{chunk_end} (beyond 37-month limit)")
+                else:
+                    logger.error(msg)
+                    summary["errors"].append(msg)
         for r in acct_rows:
             flat_raw = {k: v for k, v in r.items() if not isinstance(v, list)}
             flat_raw["_actions_json"]                 = json.dumps(r.get("actions", []))
@@ -76,7 +80,7 @@ def debug_fetch_market(market, date_start, date_stop, fx_rates, pa, time_increme
         return summary
 
     df_raw = pd.DataFrame(all_raw_rows)
-    save_excel(df_raw, f"All_raw_{market}_{date_start}_{date_stop}.xlsx", "Raw API Response")
+    save_excel(df_raw, f"All_raw_{market}_{date_start}_{date_stop}_{breakdown}.xlsx", "Raw API Response")
 
     story_id_map = {}; page_name_map = {}; creative_info_map = {}
     video_url_map = {}; campaign_map = {}
@@ -133,7 +137,7 @@ def debug_fetch_market(market, date_start, date_stop, fx_rates, pa, time_increme
         if breakdown == "age_gender" and "Platform" in df_t.columns:
             df_t = df_t.rename(columns={"Platform": "Age", "Placement": "Gender"})
         summary["transformed_rows"] = len(df_t)
-        save_excel(df_t, f"All_transformed_{market}_{date_start}_{date_stop}.xlsx", "All Meta Data")
+        save_excel(df_t, f"All_transformed_{market}_{date_start}_{date_stop}_{breakdown}.xlsx", "All Meta Data")
     except Exception as e:
         msg = f"[{market}] Transform error: {e}"
         logger.error(msg)
@@ -165,13 +169,13 @@ def main():
     for m in markets_to_run:
         s = debug_fetch_market(m, date_start, date_stop, fx_rates, pa, time_increment, breakdown)
         all_summaries.append(s)
-        t_file = os.path.join(OUTPUT_DIR, f"All_transformed_{m}_{date_start}_{date_stop}.xlsx")
+        t_file = os.path.join(OUTPUT_DIR, f"All_transformed_{m}_{date_start}_{date_stop}_{breakdown}.xlsx")
         if os.path.exists(t_file):
             try: all_transformed.append(pd.read_excel(t_file))
             except Exception: pass
     if all_transformed:
         df_merged = pd.concat(all_transformed, ignore_index=True)
-        save_excel(df_merged, f"All_transformed_HKTW_{date_start}_{date_stop}.xlsx", "All Meta Data")
+        save_excel(df_merged, f"All_transformed_HKTW_{date_start}_{date_stop}_{breakdown}.xlsx", "All Meta Data")
         logger.info(f"Merged HKTW file: {len(df_merged)} rows")
     if upload and all_transformed:
         output_file = _output_filename(time_increment, breakdown)

@@ -240,14 +240,26 @@ def transform(raw_rows, creative_info_map=None, video_url_map=None, story_id_map
         if not creative_info_map: return ""
         return creative_info_map.get(str(ad_id), {}).get("image_url", "")
 
-    def get_video_url(ad_id):
+    def get_video_permalink(ad_id):
         if not creative_info_map or not video_url_map: return ""
         vid = creative_info_map.get(str(ad_id), {}).get("video_id", "")
-        return video_url_map.get(vid, "") if vid else ""
+        if not vid: return ""
+        entry = video_url_map.get(vid, {})
+        if isinstance(entry, str): return entry
+        return entry.get("permalink", "")
 
-    df["Post URL"]            = df["Ad ID"].astype(str).apply(build_post_url)
-    df["Creative Image URL"]  = df["Ad ID"].astype(str).apply(get_image_url)
-    df["Creative Video URL"]  = df["Ad ID"].astype(str).apply(get_video_url)
+    def get_video_source(ad_id):
+        if not creative_info_map or not video_url_map: return ""
+        vid = creative_info_map.get(str(ad_id), {}).get("video_id", "")
+        if not vid: return ""
+        entry = video_url_map.get(vid, {})
+        if isinstance(entry, str): return ""
+        return entry.get("source", "")
+
+    df["Post URL"]                       = df["Ad ID"].astype(str).apply(build_post_url)
+    df["Creative Image URL"]             = df["Ad ID"].astype(str).apply(get_image_url)
+    df["Creative Video URL (Permalink)"] = df["Ad ID"].astype(str).apply(get_video_permalink)
+    df["Creative Video URL (Source)"]    = df["Ad ID"].astype(str).apply(get_video_source)
 
     # Campaign info from campaign_map
     if campaign_map:
@@ -275,7 +287,8 @@ OUTPUT_COLUMNS = [
     "OB~", "Objective", "Channel",
     "Media Buying",
     "Account name", "Campaign name", "Ad Set Name", "Ad name",
-    "Post URL", "Creative Image URL", "Creative Video URL",
+    "Post URL", "Creative Image URL",
+    "Creative Video URL (Permalink)", "Creative Video URL (Source)",
     "Campaign Start Date", "Campaign End Date", "Campaign Budget",
     "Amount spent", "Reach", "Frequency", "Impressions",
     "Link clicks", "Outbound clicks",

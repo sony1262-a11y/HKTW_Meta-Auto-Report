@@ -102,7 +102,10 @@ def fetch_market(market, date_start, date_stop, fx_rates, pa, time_increment=1, 
                 )
                 acct_rows.extend(rows)
             except Exception as e:
-                logger.error(f"[{market}] Error {acct['id']} [{chunk_start}~{chunk_end}]: {e}")
+                if "3018" in str(e):
+                    logger.warning(f"[{market}] Skipping {chunk_start}~{chunk_end} (beyond 37-month limit)")
+                else:
+                    logger.error(f"[{market}] Error {acct['id']} [{chunk_start}~{chunk_end}]: {e}")
         all_rows.extend(acct_rows)
         if acct_rows: logger.info(f"[{market}] {acct['name']}: {len(acct_rows)} rows")
 
