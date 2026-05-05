@@ -86,6 +86,51 @@ def get_fy(date):
     else: fy_start, fy_end = year - 1, year
     return f"FY{str(fy_start)[2:]}{str(fy_end)[2:]}"
 
+_QUARTER_LABELS = {1: "JFM", 2: "JFM", 3: "JFM",
+                   4: "AMJ", 5: "AMJ", 6: "AMJ",
+                   7: "JAS", 8: "JAS", 9: "JAS",
+                   10: "OND", 11: "OND", 12: "OND"}
+
+def get_quarter(date):
+    """Return quarter label e.g. JFM'26 from a datetime."""
+    if pd.isna(date): return ""
+    label = _QUARTER_LABELS.get(date.month, "")
+    year2 = str(date.year)[2:]
+    return f"{label}'{year2}"
+
+def get_duration_group(creative_type: str) -> str:
+    """
+    Map Creative Type to Duration Group bucket.
+    Numeric value (seconds) → ≤15s / 16-30s / 31-45s / 46-60s / >60s
+    Non-numeric or 0 → Display
+    display/DISPLAY/static/similar → Display
+    """
+    if not isinstance(creative_type, str) or not creative_type.strip():
+        return ""
+    ct = creative_type.strip()
+    # Check for display-like values first (case-insensitive, may have surrounding chars)
+    ct_lower = ct.lower()
+    if "display" in ct_lower or ct_lower == "static":
+        return "Display"
+    # Try to parse as a number
+    try:
+        secs = float(ct)
+    except ValueError:
+        # Contains letters / colons etc. → not a duration
+        return ""
+    if secs <= 0:
+        return "Display"
+    elif secs <= 15:
+        return "≤15s"
+    elif secs <= 30:
+        return "16-30s"
+    elif secs <= 45:
+        return "31-45s"
+    elif secs <= 60:
+        return "46-60s"
+    else:
+        return ">60s"
+
 def get_an_value(campaign_name):
     if not isinstance(campaign_name, str): return ""
     m = re.search(r"_AN~(.+?)_CN~", campaign_name)
@@ -329,6 +374,7 @@ def transform(
     df["Market"] = df["Ad Account Name"].apply(get_market_from_account)
     df["FY"]     = df["Day"].apply(get_fy)
     df["Year"]   = df["Day"].dt.year.astype("Int64").astype(str).replace("<NA>", "")
+    df["Quarter"] = df["Day"].apply(get_quarter)
     df["Month"]  = df["Day"].dt.month.astype("Int64").astype(str).replace("<NA>", "")
     df["Date"]   = df["Day"].dt.strftime("%Y-%m-%d").fillna("")
 
@@ -348,6 +394,7 @@ def transform(
     df["Creative Code"]   = df["Creative Tag"].apply(get_creative_code)
     df["Channel"]         = df["Creative Tag"].apply(get_channel_from_tag)
     df["Creative Format"] = df["Creative Tag"].apply(get_creative_format)
+    df["Duration Group"]  = df["Creative Format"].apply(get_duration_group)
     df["Content Type"]    = df.apply(
         lambda r: get_content_type(r["Ad Account Name"], r["Creative Tag"]), axis=1
     )
@@ -377,11 +424,11 @@ def _empty_dataframe():
 
 
 OUTPUT_COLUMNS = [
-    "Market", "FY", "Year", "Month", "Date",
+    "Market", "FY", "Year", "Quarter", "Month", "Date",
     "Category Type", "Category",
     "Brand", "Boutique", "Objective", "Campaign", "TA",
     "Creative Name", "Creative Tag", "Creative Code", "Creative Format",
-    "P2P", "Channel", "Content Type",
+    "P2P", "Channel", "Content Type", "Duration Group",
     "Media Buying",
     "Ad Account ID", "Ad Account Name",
     "Campaign ID", "Campaign Name",

@@ -10,7 +10,7 @@ from scripts.all_transformer import transform, OUTPUT_COLUMNS
 from scripts.all_report import (
     INSIGHT_FIELDS, BREAKDOWN_MAP, SP_FOLDER, SHEET_NAME,
     load_fx_rates, load_existing, merge_and_deduplicate, save_to_excel,
-    _output_filename, monthly_chunks,
+    _output_filename, monthly_chunks, daily_chunks,
 )
 from scripts.power_automate_client import PowerAutomateClient
 from scripts.account_loader import load_accounts
@@ -57,11 +57,29 @@ def debug_fetch_market(market, date_start, date_stop, fx_rates, pa, time_increme
                 )
                 acct_rows.extend(rows)
             except Exception as e:
-                msg = f"[{market}] Error {acct['id']} [{chunk_start}~{chunk_end}]: {e}"
-                # code=3018: date range exceeds Meta's 37-month limit — expected, not a real error
                 if "3018" in str(e):
                     logger.warning(f"[{market}] Skipping {chunk_start}~{chunk_end} (beyond 37-month limit)")
+                elif "Please reduce the amount of data" in str(e) or ("500" in str(e) and chunk_start != chunk_end):
+                    logger.warning(
+                        f"[{market}] HTTP 500 on {acct['id']} [{chunk_start}~{chunk_end}] "
+                        f"— retrying day by day..."
+                    )
+                    from scripts.all_report import daily_chunks as _daily_chunks
+                    for day_start, day_end in _daily_chunks(chunk_start, chunk_end):
+                        try:
+                            day_rows = client.get_insights(
+                                ad_account_id=acct["id"], date_start=day_start, date_stop=day_end,
+                                level="ad", fields=INSIGHT_FIELDS, breakdowns=breakdowns, time_increment=time_increment,
+                            )
+                            acct_rows.extend(day_rows)
+                        except Exception as day_e:
+                            if "3018" in str(day_e):
+                                logger.warning(f"[{market}] Skipping {day_start} (beyond 37-month limit)")
+                            else:
+                                msg = f"[{market}] Error {acct['id']} [{day_start}]: {day_e}"
+                                logger.error(msg); summary["errors"].append(msg)
                 else:
+                    msg = f"[{market}] Error {acct['id']} [{chunk_start}~{chunk_end}]: {e}"
                     logger.error(msg)
                     summary["errors"].append(msg)
         for r in acct_rows:

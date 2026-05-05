@@ -145,46 +145,33 @@ class MetaAPIClient:
                 }
                 for cid in chunk
             ]
-            try:
-                resp = requests.post(
-                    f"{META_API_BASE}/",
-                    data={"access_token": self.access_token, "batch": json.dumps(batch)},
-                    timeout=60,
-                )
-                resp.raise_for_status()
-                responses = resp.json()
-
-                for j, item in enumerate(responses):
-                    cid = chunk[j]
-                    if not item or item.get("code") != 200:
-                        result[cid] = dict(empty)
-                        continue
-                    try:
-                        body = json.loads(item["body"])
-                        # Budget: prefer lifetime_budget, fallback daily_budget
-                        # Meta returns budget in cents for some currencies — divide by 100
-                        raw_budget = body.get("lifetime_budget") or body.get("daily_budget") or ""
-                        if raw_budget and str(raw_budget).isdigit() and int(raw_budget) > 0:
-                            budget = str(int(raw_budget) / 100)
-                        else:
-                            budget = str(raw_budget) if raw_budget else ""
-
-                        start = body.get("start_time", "")
-                        stop  = body.get("stop_time", "")
-                        # Trim to date only (YYYY-MM-DD), drop timezone
-                        result[cid] = {
-                            "start":  start[:10] if start else "",
-                            "stop":   stop[:10] if stop else "",
-                            "budget": budget,
-                        }
-                    except Exception:
-                        result[cid] = dict(empty)
-
-                time.sleep(0.3)
-            except Exception as e:
-                logger.warning(f"[{self.market}] Batch campaign info failed (chunk {i}): {e}")
+            responses = self._batch_post(batch, label="campaign_info")
+            if responses is None:
                 for cid in chunk:
                     result[cid] = dict(empty)
+                continue
+            for j, item in enumerate(responses):
+                cid = chunk[j]
+                if not item or item.get("code") != 200:
+                    result[cid] = dict(empty)
+                    continue
+                try:
+                    body = json.loads(item["body"])
+                    raw_budget = body.get("lifetime_budget") or body.get("daily_budget") or ""
+                    if raw_budget and str(raw_budget).isdigit() and int(raw_budget) > 0:
+                        budget = str(int(raw_budget) / 100)
+                    else:
+                        budget = str(raw_budget) if raw_budget else ""
+                    start = body.get("start_time", "")
+                    stop  = body.get("stop_time", "")
+                    result[cid] = {
+                        "start":  start[:10] if start else "",
+                        "stop":   stop[:10] if stop else "",
+                        "budget": budget,
+                    }
+                except Exception:
+                    result[cid] = dict(empty)
+            time.sleep(0.3)
 
         resolved = sum(1 for v in result.values() if v.get("start"))
         logger.info(f"[{self.market}] get_campaign_info: {resolved}/{len(unique_ids)} campaigns resolved")
@@ -244,33 +231,26 @@ class MetaAPIClient:
         for i in range(0, len(unique_ids), self.BATCH_SIZE):
             chunk = unique_ids[i:i + self.BATCH_SIZE]
             batch = [{"method": "GET", "relative_url": f"{vid}?fields=permalink_url,source"} for vid in chunk]
-            try:
-                resp = requests.post(
-                    f"{META_API_BASE}/",
-                    data={"access_token": self.access_token, "batch": json.dumps(batch)},
-                    timeout=60,
-                )
-                resp.raise_for_status()
-                responses = resp.json()
-                for j, item in enumerate(responses):
-                    vid = chunk[j]
-                    if not item or item.get("code") != 200:
-                        result[vid] = {"permalink": "", "source": ""}
-                        continue
-                    try:
-                        body      = json.loads(item["body"])
-                        permalink = body.get("permalink_url", "")
-                        if permalink and permalink.startswith("/"):
-                            permalink = f"https://www.facebook.com{permalink}"
-                        source = body.get("source", "")
-                        result[vid] = {"permalink": permalink, "source": source}
-                    except Exception:
-                        result[vid] = {"permalink": "", "source": ""}
-                time.sleep(0.5)
-            except Exception as e:
-                logger.warning(f"[{self.market}] Batch video URL lookup failed (chunk {i}): {e}")
+            responses = self._batch_post(batch, label="video_urls")
+            if responses is None:
                 for vid in chunk:
                     result[vid] = {"permalink": "", "source": ""}
+                continue
+            for j, item in enumerate(responses):
+                vid = chunk[j]
+                if not item or item.get("code") != 200:
+                    result[vid] = {"permalink": "", "source": ""}
+                    continue
+                try:
+                    body      = json.loads(item["body"])
+                    permalink = body.get("permalink_url", "")
+                    if permalink and permalink.startswith("/"):
+                        permalink = f"https://www.facebook.com{permalink}"
+                    source = body.get("source", "")
+                    result[vid] = {"permalink": permalink, "source": source}
+                except Exception:
+                    result[vid] = {"permalink": "", "source": ""}
+            time.sleep(0.5)
         resolved_pl = sum(1 for v in result.values() if v.get("permalink"))
         resolved_src = sum(1 for v in result.values() if v.get("source"))
         logger.info(
@@ -341,47 +321,40 @@ class MetaAPIClient:
                 }
                 for story_id in chunk
             ]
-            try:
-                resp = requests.post(
-                    f"{META_API_BASE}/",
-                    data={"access_token": self.access_token, "batch": json.dumps(batch)},
-                    timeout=60,
-                )
-                resp.raise_for_status()
-                responses = resp.json()
-                for j, item in enumerate(responses):
-                    story_id = chunk[j]
-                    empty_media = {"image_url": "", "video_url": ""}
-                    if not item or item.get("code") != 200:
-                        result[story_id] = empty_media
-                        continue
-                    try:
-                        body        = json.loads(item["body"])
-                        attachments = body.get("attachments", {}).get("data", [])
-                        image_url   = ""
-                        video_url   = ""
-                        for att in attachments:
-                            media = att.get("media", {})
-                            if not image_url and media.get("image", {}).get("src"):
-                                image_url = media["image"]["src"]
-                            if not video_url and media.get("video_id"):
-                                vid = media["video_id"]
-                                video_url = f"https://www.facebook.com/video/{vid}/"
-                            for sub in att.get("subattachments", {}).get("data", []):
-                                sub_media = sub.get("media", {})
-                                if not image_url and sub_media.get("image", {}).get("src"):
-                                    image_url = sub_media["image"]["src"]
-                                if not video_url and sub_media.get("video_id"):
-                                    vid = sub_media["video_id"]
-                                    video_url = f"https://www.facebook.com/video/{vid}/"
-                        result[story_id] = {"image_url": image_url, "video_url": video_url}
-                    except Exception:
-                        result[story_id] = empty_media
-                time.sleep(0.5)
-            except Exception as e:
-                logger.warning(f"[{self.market}] Batch post media lookup failed (chunk {i}): {e}")
+            responses = self._batch_post(batch, label="post_media")
+            if responses is None:
                 for story_id in chunk:
                     result[story_id] = {"image_url": "", "video_url": ""}
+                continue
+            for j, item in enumerate(responses):
+                story_id = chunk[j]
+                empty_media = {"image_url": "", "video_url": ""}
+                if not item or item.get("code") != 200:
+                    result[story_id] = empty_media
+                    continue
+                try:
+                    body        = json.loads(item["body"])
+                    attachments = body.get("attachments", {}).get("data", [])
+                    image_url   = ""
+                    video_url   = ""
+                    for att in attachments:
+                        media = att.get("media", {})
+                        if not image_url and media.get("image", {}).get("src"):
+                            image_url = media["image"]["src"]
+                        if not video_url and media.get("video_id"):
+                            vid = media["video_id"]
+                            video_url = f"https://www.facebook.com/video/{vid}/"
+                        for sub in att.get("subattachments", {}).get("data", []):
+                            sub_media = sub.get("media", {})
+                            if not image_url and sub_media.get("image", {}).get("src"):
+                                image_url = sub_media["image"]["src"]
+                            if not video_url and sub_media.get("video_id"):
+                                vid = sub_media["video_id"]
+                                video_url = f"https://www.facebook.com/video/{vid}/"
+                    result[story_id] = {"image_url": image_url, "video_url": video_url}
+                except Exception:
+                    result[story_id] = empty_media
+            time.sleep(0.5)
         resolved_img = sum(1 for v in result.values() if v.get("image_url"))
         resolved_vid = sum(1 for v in result.values() if v.get("video_url"))
         logger.info(
@@ -391,6 +364,39 @@ class MetaAPIClient:
         return result
 
     # ── Internal batch helpers ────────────────────────────────────────────────
+
+    def _batch_post(self, batch: list[dict], label: str = "") -> list[dict] | None:
+        """
+        POST a Meta batch request with automatic retry on app-level rate limit (code=4).
+        Returns the responses list, or None if all retries are exhausted.
+        Retries up to 3 times with exponential backoff (60s, 120s, 180s).
+        """
+        for attempt in range(1, 4):
+            try:
+                resp = requests.post(
+                    f"{META_API_BASE}/",
+                    data={"access_token": self.access_token, "batch": json.dumps(batch)},
+                    timeout=60,
+                )
+                resp.raise_for_status()
+                responses = resp.json()
+                # Detect app-level rate limit in any item
+                rate_limited = any(item and item.get("code") == 4 for item in responses)
+                if rate_limited:
+                    wait = 60 * attempt
+                    logger.warning(
+                        f"[{self.market}] {label} rate limited (code=4) "
+                        f"— sleeping {wait}s before retry (attempt {attempt}/3)..."
+                    )
+                    time.sleep(wait)
+                    continue
+                return responses
+            except Exception as e:
+                logger.warning(f"[{self.market}] {label} batch request failed (attempt {attempt}): {e}")
+                if attempt < 3:
+                    time.sleep(30 * attempt)
+        logger.error(f"[{self.market}] {label} batch request failed after 3 attempts — returning empty")
+        return None
 
     def _batch_get_creative_info(self, ad_ids: list[str]) -> dict[str, dict]:
         result: dict[str, dict] = {}
@@ -416,66 +422,59 @@ class MetaAPIClient:
                 }
                 for ad_id in chunk
             ]
-            try:
-                resp = requests.post(
-                    f"{META_API_BASE}/",
-                    data={"access_token": self.access_token, "batch": json.dumps(batch)},
-                    timeout=60,
-                )
-                resp.raise_for_status()
-                responses = resp.json()
-                page_ids_found = 0
-                for j, item in enumerate(responses):
-                    ad_id = chunk[j]
-                    if not item or item.get("code") != 200:
-                        if j == 0 and i == 0:
-                            logger.warning(
-                                f"[{self.market}] creative API response code={item.get('code') if item else 'None'} "
-                                f"body={str(item.get('body', ''))[:300] if item else 'None'}"
-                            )
-                        result[ad_id] = dict(empty)
-                        continue
-                    try:
-                        body     = json.loads(item["body"])
-                        creative = body.get("creative", {})
-                        if j == 0 and i == 0:
-                            logger.info(f"[{self.market}] creative API sample body: {str(body)[:300]}")
-                        oss     = creative.get("object_story_spec", {})
-                        # actor_id is the authoritative Page ID for all ad types
-                        # (dark posts, video ads, catalog ads all populate actor_id)
-                        # object_story_spec.page_id only works for page post boosts
-                        page_id = (
-                            creative.get("actor_id") or
-                            oss.get("page_id", "")
-                        )
-                        object_story_id = creative.get("object_story_id", "")
-                        image_url = (
-                            creative.get("image_url", "") or
-                            oss.get("video_data", {}).get("image_url", "") or
-                            oss.get("link_data", {}).get("picture", "")
-                        )
-                        raw_vid = (
-                            oss.get("video_data", {}).get("video_id") or
-                            creative.get("video_id")
-                        )
-                        video_id = str(raw_vid) if raw_vid else ""
-                        result[ad_id] = {
-                            "page_id":         str(page_id) if page_id else "",
-                            "object_story_id": str(object_story_id) if object_story_id else "",
-                            "image_url":       image_url,
-                            "video_id":        video_id,
-                        }
-                        if page_id:
-                            page_ids_found += 1
-                    except Exception:
-                        result[ad_id] = dict(empty)
-                if i == 0:
-                    logger.info(f"[{self.market}] creative API chunk 0: {page_ids_found}/{len(chunk)} page_ids found")
-                time.sleep(0.5)
-            except Exception as e:
-                logger.warning(f"[{self.market}] Batch creative lookup failed (chunk {i}): {e}")
+            responses = self._batch_post(batch, label="creative_info")
+            if responses is None:
                 for ad_id in chunk:
                     result[ad_id] = dict(empty)
+                continue
+            page_ids_found = 0
+            for j, item in enumerate(responses):
+                ad_id = chunk[j]
+                if not item or item.get("code") != 200:
+                    if j == 0 and i == 0:
+                        logger.warning(
+                            f"[{self.market}] creative API response code={item.get('code') if item else 'None'} "
+                            f"body={str(item.get('body', ''))[:300] if item else 'None'}"
+                        )
+                    result[ad_id] = dict(empty)
+                    continue
+                try:
+                    body     = json.loads(item["body"])
+                    creative = body.get("creative", {})
+                    if j == 0 and i == 0:
+                        logger.info(f"[{self.market}] creative API sample body: {str(body)[:300]}")
+                    oss     = creative.get("object_story_spec", {})
+                    # actor_id is the authoritative Page ID for all ad types
+                    # (dark posts, video ads, catalog ads all populate actor_id)
+                    # object_story_spec.page_id only works for page post boosts
+                    page_id = (
+                        creative.get("actor_id") or
+                        oss.get("page_id", "")
+                    )
+                    object_story_id = creative.get("object_story_id", "")
+                    image_url = (
+                        creative.get("image_url", "") or
+                        oss.get("video_data", {}).get("image_url", "") or
+                        oss.get("link_data", {}).get("picture", "")
+                    )
+                    raw_vid = (
+                        oss.get("video_data", {}).get("video_id") or
+                        creative.get("video_id")
+                    )
+                    video_id = str(raw_vid) if raw_vid else ""
+                    result[ad_id] = {
+                        "page_id":         str(page_id) if page_id else "",
+                        "object_story_id": str(object_story_id) if object_story_id else "",
+                        "image_url":       image_url,
+                        "video_id":        video_id,
+                    }
+                    if page_id:
+                        page_ids_found += 1
+                except Exception:
+                    result[ad_id] = dict(empty)
+            if i == 0:
+                logger.info(f"[{self.market}] creative API chunk 0: {page_ids_found}/{len(chunk)} page_ids found")
+            time.sleep(0.5)
 
         total_page_ids = sum(1 for v in result.values() if v.get("page_id"))
         logger.info(f"[{self.market}] _batch_get_creative_info: {total_page_ids}/{len(ad_ids)} page_ids resolved")
@@ -495,31 +494,24 @@ class MetaAPIClient:
                     {"method": "GET", "relative_url": f"{ad_id}?fields=effective_object_story_id"}
                     for ad_id in chunk
                 ]
-                try:
-                    resp = requests.post(
-                        f"{META_API_BASE}/",
-                        data={"access_token": self.access_token, "batch": json.dumps(batch)},
-                        timeout=60,
-                    )
-                    resp.raise_for_status()
-                    responses = resp.json()
-                    found = 0
-                    for j, item in enumerate(responses):
-                        ad_id = chunk[j]
-                        if not item or item.get("code") != 200:
-                            continue
-                        try:
-                            body = json.loads(item["body"])
-                            osi  = body.get("effective_object_story_id", "")
-                            if osi and "_" in str(osi):
-                                result[ad_id]["object_story_id"] = str(osi)
-                                found += 1
-                        except Exception:
-                            pass
-                    logger.info(f"[{self.market}] effective_object_story_id pass: {found}/{len(chunk)} resolved")
-                    time.sleep(0.5)
-                except Exception as e:
-                    logger.warning(f"[{self.market}] effective_object_story_id batch failed: {e}")
+                responses = self._batch_post(batch, label="effective_object_story_id")
+                if responses is None:
+                    continue
+                found = 0
+                for j, item in enumerate(responses):
+                    ad_id = chunk[j]
+                    if not item or item.get("code") != 200:
+                        continue
+                    try:
+                        body = json.loads(item["body"])
+                        osi  = body.get("effective_object_story_id", "")
+                        if osi and "_" in str(osi):
+                            result[ad_id]["object_story_id"] = str(osi)
+                            found += 1
+                    except Exception:
+                        pass
+                logger.info(f"[{self.market}] effective_object_story_id pass: {found}/{len(chunk)} resolved")
+                time.sleep(0.5)
         return result
 
     def _batch_get_page_names(self, page_ids: list[str]) -> dict[str, str]:
@@ -530,36 +522,29 @@ class MetaAPIClient:
         for i in range(0, len(page_ids), self.BATCH_SIZE):
             chunk = page_ids[i:i + self.BATCH_SIZE]
             batch = [{"method": "GET", "relative_url": f"{page_id}?fields=name"} for page_id in chunk]
-            try:
-                resp = requests.post(
-                    f"{META_API_BASE}/",
-                    data={"access_token": self.access_token, "batch": json.dumps(batch)},
-                    timeout=60,
-                )
-                resp.raise_for_status()
-                responses = resp.json()
-                for j, item in enumerate(responses):
-                    page_id = chunk[j]
-                    if not item or item.get("code") != 200:
-                        if j == 0 and i == 0:
-                            logger.warning(
-                                f"[{self.market}] page name API response code={item.get('code') if item else 'None'} "
-                                f"body={str(item.get('body', ''))[:300] if item else 'None'}"
-                            )
-                        result[page_id] = ""
-                        continue
-                    try:
-                        body = json.loads(item["body"])
-                        if j == 0 and i == 0:
-                            logger.info(f"[{self.market}] page name API sample body: {str(body)[:200]}")
-                        result[page_id] = body.get("name", "")
-                    except Exception:
-                        result[page_id] = ""
-                time.sleep(0.5)
-            except Exception as e:
-                logger.warning(f"[{self.market}] Batch page_name lookup failed (chunk {i}): {e}")
+            responses = self._batch_post(batch, label="page_names")
+            if responses is None:
                 for page_id in chunk:
                     result[page_id] = ""
+                continue
+            for j, item in enumerate(responses):
+                page_id = chunk[j]
+                if not item or item.get("code") != 200:
+                    if j == 0 and i == 0:
+                        logger.warning(
+                            f"[{self.market}] page name API response code={item.get('code') if item else 'None'} "
+                            f"body={str(item.get('body', ''))[:300] if item else 'None'}"
+                        )
+                    result[page_id] = ""
+                    continue
+                try:
+                    body = json.loads(item["body"])
+                    if j == 0 and i == 0:
+                        logger.info(f"[{self.market}] page name API sample body: {str(body)[:200]}")
+                    result[page_id] = body.get("name", "")
+                except Exception:
+                    result[page_id] = ""
+            time.sleep(0.5)
         names_found = sum(1 for v in result.values() if v)
         logger.info(f"[{self.market}] _batch_get_page_names: {names_found}/{len(page_ids)} names resolved")
         return result

@@ -15,11 +15,42 @@ logger = logging.getLogger(__name__)
 TIMEOUT = 120
 
 
+UPLOAD_RETRYABLE = (429, 500, 502, 503, 504)
+UPLOAD_MAX_RETRIES = 3
+UPLOAD_RETRY_DELAYS = (10, 30, 60)   # seconds between attempts
+
+
 class PowerAutomateClient:
 
     def __init__(self):
         self.upload_url   = PA_UPLOAD_URL
         self.download_url = PA_DOWNLOAD_URL
+
+    def _post_with_retry(self, payload: dict, label: str) -> bool:
+        """POST to PA upload URL with retry on transient errors."""
+        import time
+        for attempt in range(1, UPLOAD_MAX_RETRIES + 1):
+            try:
+                resp = requests.post(self.upload_url, json=payload, timeout=TIMEOUT)
+            except requests.exceptions.RequestException as e:
+                logger.warning(f"Upload request error (attempt {attempt}/{UPLOAD_MAX_RETRIES}): {e}")
+                if attempt < UPLOAD_MAX_RETRIES:
+                    time.sleep(UPLOAD_RETRY_DELAYS[attempt - 1])
+                    continue
+                raise
+            if resp.status_code in (200, 201, 202):
+                logger.info(f"Upload success: {label}")
+                return True
+            if resp.status_code in UPLOAD_RETRYABLE and attempt < UPLOAD_MAX_RETRIES:
+                logger.warning(
+                    f"Upload got {resp.status_code} (attempt {attempt}/{UPLOAD_MAX_RETRIES}) "
+                    f"— retrying in {UPLOAD_RETRY_DELAYS[attempt - 1]}s..."
+                )
+                time.sleep(UPLOAD_RETRY_DELAYS[attempt - 1])
+                continue
+            logger.error(f"Upload failed [{resp.status_code}]: {resp.text[:500]}")
+            resp.raise_for_status()
+        raise RuntimeError(f"Upload failed after {UPLOAD_MAX_RETRIES} attempts: {label}")
 
     def upload_file(self, local_path: str, sp_folder: str, sp_filename: str | None = None) -> bool:
         if not self.upload_url:
@@ -29,12 +60,7 @@ class PowerAutomateClient:
             content_b64 = base64.b64encode(f.read()).decode("utf-8")
         payload = {"fileName": filename, "fileContent": content_b64, "folderPath": sp_folder}
         logger.info(f"Uploading '{filename}' → {sp_folder}")
-        resp = requests.post(self.upload_url, json=payload, timeout=TIMEOUT)
-        if resp.status_code in (200, 201, 202):
-            logger.info(f"Upload success: {filename}")
-            return True
-        logger.error(f"Upload failed [{resp.status_code}]: {resp.text[:500]}")
-        resp.raise_for_status()
+        return self._post_with_retry(payload, filename)
 
     def upload_bytes(self, data: bytes, sp_folder: str, sp_filename: str) -> bool:
         if not self.upload_url:
@@ -42,12 +68,7 @@ class PowerAutomateClient:
         content_b64 = base64.b64encode(data).decode("utf-8")
         payload = {"fileName": sp_filename, "fileContent": content_b64, "folderPath": sp_folder}
         logger.info(f"Uploading bytes '{sp_filename}' → {sp_folder}")
-        resp = requests.post(self.upload_url, json=payload, timeout=TIMEOUT)
-        if resp.status_code in (200, 201, 202):
-            logger.info(f"Upload success: {sp_filename}")
-            return True
-        logger.error(f"Upload failed [{resp.status_code}]: {resp.text[:500]}")
-        resp.raise_for_status()
+        return self._post_with_retry(payload, sp_filename)
 
     def download_file(self, sp_folder: str, sp_filename: str, local_path: str) -> bool:
         if not self.download_url:

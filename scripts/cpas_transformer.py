@@ -45,6 +45,39 @@ def get_fy(date):
     else: fy_start, fy_end = year - 1, year
     return f"FY{str(fy_start)[2:]}{str(fy_end)[2:]}"
 
+_QUARTER_LABELS = {1: "JFM", 2: "JFM", 3: "JFM",
+                   4: "AMJ", 5: "AMJ", 6: "AMJ",
+                   7: "JAS", 8: "JAS", 9: "JAS",
+                   10: "OND", 11: "OND", 12: "OND"}
+
+def get_quarter(date):
+    if pd.isna(date): return ""
+    label = _QUARTER_LABELS.get(date.month, "")
+    return f"{label}'{str(date.year)[2:]}"
+
+def get_duration_group(creative_type: str) -> str:
+    if not isinstance(creative_type, str) or not creative_type.strip():
+        return ""
+    ct = creative_type.strip()
+    if "display" in ct.lower() or ct.lower() == "static":
+        return "Display"
+    try:
+        secs = float(ct)
+    except ValueError:
+        return ""
+    if secs <= 0:
+        return "Display"
+    elif secs <= 15:
+        return "≤15s"
+    elif secs <= 30:
+        return "16-30s"
+    elif secs <= 45:
+        return "31-45s"
+    elif secs <= 60:
+        return "46-60s"
+    else:
+        return ">60s"
+
 def get_brand(campaign_name):
     if not isinstance(campaign_name, str): return ""
     m = re.search(r"_CN~([^@_]+)@", campaign_name)
@@ -210,6 +243,7 @@ def transform(raw_rows, creative_info_map=None, video_url_map=None, story_id_map
     df["Market"]        = df["Account name"].apply(get_market_from_account)
     df["FY"]            = df["Day"].apply(get_fy)
     df["Year"]          = df["Day"].dt.year.astype("Int64").astype(str).replace("<NA>", "")
+    df["Quarter"]       = df["Day"].apply(get_quarter)
     df["Month"]         = df["Day"].dt.month.astype("Int64").astype(str).replace("<NA>", "")
     df["Date"]          = df["Day"].dt.strftime("%Y-%m-%d").fillna("")
     df["Brand"]         = df["Campaign name"].apply(get_brand)
@@ -220,6 +254,7 @@ def transform(raw_rows, creative_info_map=None, video_url_map=None, story_id_map
     df["Creative Name"] = df["Ad name"].apply(get_creative_name)
     df["Creative Seq."] = df["Ad name"].apply(get_creative_seq)
     df["Creative Type"] = df["Creative Name"].apply(get_creative_type)
+    df["Duration Group"] = df["Creative Type"].apply(get_duration_group)
     df["OB~"]           = "SALES-PCS"
     df["Objective"]     = "PRODUCT_CATALOG_SALES"
     df["Channel"]       = df["Account name"].apply(get_channel)
@@ -281,9 +316,9 @@ def _empty_dataframe():
     return pd.DataFrame(columns=OUTPUT_COLUMNS)
 
 OUTPUT_COLUMNS = [
-    "Market", "FY", "Year", "Month", "Date",
+    "Market", "FY", "Year", "Quarter", "Month", "Date",
     "Category", "Funding Source", "Brand", "Campaign", "Optimization",
-    "TA#", "TA Name", "Creative Seq.", "Creative Name", "Creative Type",
+    "TA#", "TA Name", "Creative Seq.", "Creative Name", "Creative Type", "Duration Group",
     "OB~", "Objective", "Channel",
     "Media Buying",
     "Account name", "Campaign name", "Ad Set Name", "Ad name",

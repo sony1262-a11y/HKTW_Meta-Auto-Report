@@ -5,11 +5,12 @@ import logging
 import pandas as pd
 
 from scripts.kol_transformer import (
-    get_market_from_account, get_fy, get_an_value, get_boutique, get_campaign,
+    get_market_from_account, get_fy, get_quarter, get_an_value, get_boutique, get_campaign,
     get_objective_kol, get_objective, get_ta, get_creative_name, get_creative_tag,
     get_p2p, get_creative_code, get_channel_from_tag, get_creative_format,
     get_content_type, get_kol_name_from_tag,
     get_category_type_and_category, get_category_by_boutique,
+    get_duration_group,
     BOUTIQUE_DEPENDENT_BRANDS,
 )
 from scripts.cpas_transformer import (
@@ -179,6 +180,7 @@ def transform(
     df["Market"] = df["Ad Account Name"].apply(get_market_from_account)
     df["FY"]     = df["Day"].apply(get_fy)
     df["Year"]   = df["Day"].dt.year.astype("Int64").astype(str).replace("<NA>", "")
+    df["Quarter"] = df["Day"].apply(get_quarter)
     df["Month"]  = df["Day"].dt.month.astype("Int64").astype(str).replace("<NA>", "")
     df["Date"]   = df["Day"].dt.strftime("%Y-%m-%d").fillna("")
 
@@ -216,6 +218,7 @@ def transform(
     df["TA Name"]       = df["Ad Set Name"].apply(get_ta_name)
     df["Creative Seq."] = df["Ad name"].apply(get_creative_seq)
     df["Creative Type"] = df["Creative Name"].apply(get_creative_type)
+    df["Duration Group"] = df["Creative Type"].apply(get_duration_group)
     df["OB~"]           = df.apply(
         lambda r: "SALES-PCS" if "CPAS" in str(r["Ad Account Name"]) else "", axis=1
     )
@@ -236,13 +239,13 @@ def _empty_dataframe():
 
 
 OUTPUT_COLUMNS = [
-    "Market", "FY", "Year", "Month", "Date",
+    "Market", "FY", "Year", "Quarter", "Month", "Date",
     "Category Type", "Category",
     "Brand", "Boutique", "Campaign", "Optimization",
     "Objective", "Channel",
     "TA", "TA#", "TA Name",
     "Creative Name", "Creative Tag", "Creative Code", "Creative Format",
-    "Creative Seq.", "Creative Type",
+    "Creative Seq.", "Creative Type", "Duration Group",
     "P2P", "Content Type", "OB~",
     "Media Buying",
     "Ad Account ID", "Ad Account Name",
