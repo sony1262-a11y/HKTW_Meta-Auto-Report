@@ -203,6 +203,48 @@ def _output_filename(time_increment, breakdown):
     return f"HKTW_Meta_All_{ti}_{bd}.xlsx"
 
 
+def migrate_existing_schema(df: "pd.DataFrame") -> "pd.DataFrame":
+    """
+    Bring a DataFrame loaded from an older SharePoint file up to the current
+    OUTPUT_COLUMNS schema.  Safe to call even if the file is already current.
+    """
+    from scripts.kol_transformer import get_quarter, get_duration_group
+
+    # ── 1. Rename old column names to new ones ───────────────────────────────
+    rename_map = {
+        "Creative Video URL": "Creative Video URL (Permalink)",   # old → new split column
+    }
+    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
+
+    # ── 2. Add missing columns with empty default ────────────────────────────
+    for col in OUTPUT_COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+
+    # ── 3. Backfill derived columns for old rows that are empty ─────────────
+    # Quarter — derive from Date column
+    empty_quarter = df["Quarter"].isna() | (df["Quarter"].astype(str).str.strip() == "")
+    if empty_quarter.any():
+        dates = pd.to_datetime(df.loc[empty_quarter, "Date"], errors="coerce")
+        df.loc[empty_quarter, "Quarter"] = dates.apply(get_quarter)
+        filled = empty_quarter.sum() - (df["Quarter"].isna() | (df["Quarter"].astype(str).str.strip() == "")).sum()
+        logger.info(f"Schema migration: filled {filled} Quarter values from Date")
+
+    # Duration Group — derive from Creative Type
+    empty_dur = df["Duration Group"].isna() | (df["Duration Group"].astype(str).str.strip() == "")
+    if empty_dur.any() and "Creative Type" in df.columns:
+        df.loc[empty_dur, "Duration Group"] = df.loc[empty_dur, "Creative Type"].fillna("").apply(get_duration_group)
+        filled = empty_dur.sum() - (df["Duration Group"].isna() | (df["Duration Group"].astype(str).str.strip() == "")).sum()
+        logger.info(f"Schema migration: filled {filled} Duration Group values from Creative Type")
+
+    # Media Buying — derive from buying_type is not available after the fact,
+    # so leave as empty string for old rows (acceptable — only affects historical data)
+
+    # ── 4. Reorder to current OUTPUT_COLUMNS (drop any extra legacy columns) ─
+    df = df[OUTPUT_COLUMNS]
+    return df
+
+
 def load_existing(pa, output_file):
     data = pa.download_bytes(SP_FOLDER, output_file)
     if data is None:
@@ -210,6 +252,7 @@ def load_existing(pa, output_file):
     try:
         df = pd.read_excel(io.BytesIO(data), sheet_name=SHEET_NAME, dtype=str)
         logger.info(f"Loaded {len(df)} existing rows")
+        df = migrate_existing_schema(df)
         return df
     except Exception as e:
         logger.error(f"Failed to read existing: {e}")

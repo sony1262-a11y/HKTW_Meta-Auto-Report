@@ -132,6 +132,24 @@ def fetch_market(market, date_start, date_stop, fx_rates, pa, time_increment=1):
     )
 
 
+def _migrate_existing_schema(df):
+    """Bring older SharePoint file up to current OUTPUT_COLUMNS schema."""
+    from scripts.kol_transformer import get_quarter, get_duration_group
+    rename_map = {"Creative Video URL": "Creative Video URL (Permalink)"}
+    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
+    for col in OUTPUT_COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+    empty_q = df["Quarter"].isna() | (df["Quarter"].astype(str).str.strip() == "")
+    if empty_q.any():
+        dates = pd.to_datetime(df.loc[empty_q, "Date"], errors="coerce")
+        df.loc[empty_q, "Quarter"] = dates.apply(get_quarter)
+    empty_d = df["Duration Group"].isna() | (df["Duration Group"].astype(str).str.strip() == "")
+    if empty_d.any() and "Creative Format" in df.columns:
+        df.loc[empty_d, "Duration Group"] = df.loc[empty_d, "Creative Format"].fillna("").apply(get_duration_group)
+    return df[OUTPUT_COLUMNS]
+
+
 def load_existing(pa):
     data = pa.download_bytes(SP_FOLDER, OUTPUT_FILE)
     if data is None:
@@ -140,6 +158,7 @@ def load_existing(pa):
     try:
         df = pd.read_excel(io.BytesIO(data), sheet_name=SHEET_NAME, dtype=str)
         logger.info(f"Loaded {len(df)} existing rows")
+        df = _migrate_existing_schema(df)
         return df
     except Exception as e:
         logger.error(f"Failed to read existing: {e}")
