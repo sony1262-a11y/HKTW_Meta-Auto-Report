@@ -45,4 +45,14 @@ jobs:
           DATE_START:           ${{ github.event.inputs.date_start }}
           DATE_STOP:            ${{ github.event.inputs.date_stop }}
           TIME_INCREMENT:       ${{ github.event.inputs.time_increment }}
-        run: python scripts/kol_report.py
+          ARTIFACT_DIR:         report_output
+        run: |
+          mkdir -p report_output
+          python scripts/kol_report.py
+      - name: Upload report as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kol-${{ github.event.inputs.market }}-${{ github.event.inputs.date_start }}-${{ github.event.inputs.date_stop }}
+          path: report_output/
+          retention-days: 30

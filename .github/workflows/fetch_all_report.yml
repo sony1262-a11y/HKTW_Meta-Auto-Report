@@ -52,4 +52,14 @@ jobs:
           DATE_STOP:            ${{ github.event.inputs.date_stop }}
           TIME_INCREMENT:       ${{ github.event.inputs.time_increment }}
           BREAKDOWN:            ${{ github.event.inputs.breakdown }}
-        run: python scripts/all_report.py
+          ARTIFACT_DIR:         report_output
+        run: |
+          mkdir -p report_output
+          python scripts/all_report.py
+      - name: Upload report as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: all-meta-${{ github.event.inputs.market }}-${{ github.event.inputs.date_start }}-${{ github.event.inputs.date_stop }}-${{ github.event.inputs.breakdown }}
+          path: report_output/
+          retention-days: 30
