@@ -57,15 +57,13 @@ def fetch_market(market, date_start, date_stop, pa, time_increment=1):
         return pd.DataFrame(columns=OUTPUT_COLUMNS)
 
     unique_ad_ids = list({str(r.get("ad_id","")) for r in all_rows if r.get("ad_id")})
-    story_id_map = {}; creative_info_map = {}; video_url_map = {}; campaign_map = {}
+    story_id_map = {}; creative_info_map = {}; campaign_map = {}
     try:
         creative_info_map = client.get_creative_info_for_ads(unique_ad_ids)
         for ad_id, info in creative_info_map.items():
             osi = info.get("object_story_id","")
             if osi and "_" in str(osi): story_id_map[ad_id] = osi
             elif info.get("page_id"): story_id_map[ad_id] = f"{info['page_id']}_0"
-        video_ids = list({info["video_id"] for info in creative_info_map.values() if info.get("video_id")})
-        if video_ids: video_url_map = client.get_video_urls(video_ids)
         missing_media = [
             ad_id for ad_id in unique_ad_ids
             if not creative_info_map.get(ad_id,{}).get("image_url")
@@ -91,7 +89,7 @@ def fetch_market(market, date_start, date_stop, pa, time_increment=1):
 
     return transform(
         all_rows, creative_info_map=creative_info_map,
-        video_url_map=video_url_map, story_id_map=story_id_map,
+        video_url_map=None, story_id_map=story_id_map,
         campaign_map=campaign_map,
     )
 
@@ -99,7 +97,7 @@ def fetch_market(market, date_start, date_stop, pa, time_increment=1):
 def _migrate_existing_schema(df):
     """Bring older SharePoint file up to current OUTPUT_COLUMNS schema."""
     from scripts.cpas_transformer import get_duration_group, get_quarter
-    rename_map = {"Creative Video URL": "Creative Video URL (Permalink)"}
+    rename_map = {}  # no column renames needed
     df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
     for col in OUTPUT_COLUMNS:
         if col not in df.columns:
@@ -165,8 +163,8 @@ def main():
         if not df_m.empty: new_frames.append(df_m)
     new_data = pd.concat(new_frames, ignore_index=True) if new_frames else pd.DataFrame(columns=OUTPUT_COLUMNS)
     logger.info(f"Total new rows: {len(new_data)}")
-    existing = load_existing(pa)
-    merged   = merge_and_deduplicate(existing, new_data)
+    # ── SharePoint accumulation skipped (upload disabled) ──
+    merged      = new_data
     excel_bytes = save_to_excel(merged)
 
     # ── Save timestamped artifact locally ──
@@ -181,10 +179,9 @@ def main():
         f.write(excel_bytes)
     logger.info(f"Artifact saved: {artifact_path} ({len(merged)} rows)")
 
-    # ── Upload to SharePoint ──
-    logger.info(f"Uploading {len(merged)} rows")
-    pa.upload_bytes(excel_bytes, SP_FOLDER, OUTPUT_FILE)
-    logger.info("CPAS Report completed.")
+    # ── SharePoint upload temporarily disabled ──
+    # pa.upload_bytes(excel_bytes, SP_FOLDER, OUTPUT_FILE)
+    logger.info("CPAS Report completed (SharePoint upload skipped).")
 
 if __name__ == "__main__":
     main()

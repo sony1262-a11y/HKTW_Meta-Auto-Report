@@ -142,7 +142,7 @@ def main():
     df_all = pd.concat(all_frames, ignore_index=True)
     logger.info(f"Total rows: {len(df_all)}")
     has_image = (df_all["Creative Image URL"].notna() & (df_all["Creative Image URL"] != "")).sum()
-    has_video = (df_all["Creative Video URL"].notna() & (df_all["Creative Video URL"] != "")).sum()
+    has_video = (df_all["Creative Image URL"].notna() & (df_all["Creative Image URL"] != "")).sum()
     has_post  = (df_all["Post URL"].notna() & (df_all["Post URL"] != "")).sum()
     logger.info(f"Asset coverage -> Post URL: {has_post}/{len(df_all)} | Image: {has_image}/{len(df_all)} | Video: {has_video}/{len(df_all)}")
     df_summary = build_summary(df_all)

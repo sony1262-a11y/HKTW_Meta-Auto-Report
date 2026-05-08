@@ -146,7 +146,7 @@ def fetch_market(market, date_start, date_stop, fx_rates, pa, time_increment=1, 
 
     unique_ad_ids = list({str(r.get("ad_id","")) for r in all_rows if r.get("ad_id")})
     story_id_map = {}; page_name_map = {}; creative_info_map = {}
-    video_url_map = {}; campaign_map = {}
+    campaign_map = {}
 
     try:
         creative_info_map = client.get_creative_info_for_ads(unique_ad_ids)
@@ -155,26 +155,19 @@ def fetch_market(market, date_start, date_stop, fx_rates, pa, time_increment=1, 
             if osi and "_" in str(osi): story_id_map[ad_id] = osi
             elif info.get("page_id"): story_id_map[ad_id] = f"{info['page_id']}_0"
         page_name_map = client.get_page_names_for_ads(unique_ad_ids, story_id_map=story_id_map)
-        video_ids = list({info["video_id"] for info in creative_info_map.values() if info.get("video_id")})
-        if video_ids: video_url_map = client.get_video_urls(video_ids)
-        missing_media = [
+        # Fallback: for ads with no image_url, try fetching post attachment thumbnail
+        missing_img = [
             a for a in unique_ad_ids
             if not creative_info_map.get(a,{}).get("image_url")
-            and not creative_info_map.get(a,{}).get("video_id")
             and story_id_map.get(a,"")
         ]
-        if missing_media:
-            msi = list({story_id_map[a] for a in missing_media if story_id_map.get(a)})
+        if missing_img:
+            msi = list({story_id_map[a] for a in missing_img if story_id_map.get(a)})
             post_media = client.get_post_media(msi)
-            for ad_id in missing_media:
+            for ad_id in missing_img:
                 sid = story_id_map.get(ad_id,"")
-                if sid and sid in post_media:
-                    m = post_media[sid]
-                    if m.get("image_url"): creative_info_map[ad_id]["image_url"] = m["image_url"]
-                    if m.get("video_url"):
-                        key = f"__post__{sid}"
-                        creative_info_map[ad_id]["video_id"] = key
-                        video_url_map[key] = m["video_url"]
+                if sid and sid in post_media and post_media[sid].get("image_url"):
+                    creative_info_map[ad_id]["image_url"] = post_media[sid]["image_url"]
         unique_cids = list({str(r.get("campaign_id","")) for r in all_rows if r.get("campaign_id")})
         campaign_map = client.get_campaign_info(unique_cids)
         logger.info(
@@ -189,7 +182,7 @@ def fetch_market(market, date_start, date_stop, fx_rates, pa, time_increment=1, 
 
     df = transform(
         all_rows, fx_rates=fx_rates, page_name_map=page_name_map,
-        creative_info_map=creative_info_map, video_url_map=video_url_map,
+        creative_info_map=creative_info_map, video_url_map=None,
         story_id_map=story_id_map, campaign_map=campaign_map,
     )
     if breakdown == "age_gender" and "Platform" in df.columns:
@@ -306,8 +299,8 @@ def main():
         if not df_m.empty: new_frames.append(df_m)
     new_data = pd.concat(new_frames, ignore_index=True) if new_frames else pd.DataFrame(columns=OUTPUT_COLUMNS)
     logger.info(f"Total new rows: {len(new_data)}")
-    existing = load_existing(pa, output_file)
-    merged   = merge_and_deduplicate(existing, new_data, breakdown)
+    # ── SharePoint accumulation skipped (upload disabled) ──
+    merged      = new_data
     excel_bytes = save_to_excel(merged)
 
     # ── Save timestamped artifact locally (for GitHub Actions artifact download) ──
@@ -323,10 +316,9 @@ def main():
         f.write(excel_bytes)
     logger.info(f"Artifact saved: {artifact_path} ({len(merged)} rows)")
 
-    # ── Upload to SharePoint (fixed filename for accumulation) ──
-    logger.info(f"Uploading {len(merged)} rows -> {SP_FOLDER}/{output_file}")
-    pa.upload_bytes(excel_bytes, SP_FOLDER, output_file)
-    logger.info("All Meta Report completed.")
+    # ── SharePoint upload temporarily disabled ──
+    # pa.upload_bytes(excel_bytes, SP_FOLDER, output_file)
+    logger.info("All Meta Report completed (SharePoint upload skipped).")
 
 if __name__ == "__main__":
     main()
