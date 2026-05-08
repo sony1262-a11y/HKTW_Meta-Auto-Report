@@ -38,20 +38,51 @@ def fetch_market(market, date_start, date_stop, pa, time_increment=1):
         return pd.DataFrame(columns=OUTPUT_COLUMNS)
     client   = MetaAPIClient(market)
     all_rows = []
+
+    from scripts.all_report import monthly_chunks, daily_chunks
+    chunks = monthly_chunks(date_start, date_stop)
+    if len(chunks) > 1:
+        logger.info(f"[{market}] Date range spans {len(chunks)} months — fetching month by month")
+
     for acct in accounts:
         logger.info(f"[{market}]   -> {acct['name']} ({acct['id']})")
-        try:
-            rows = client.get_insights(
-                ad_account_id=acct["id"], date_start=date_start, date_stop=date_stop,
-                level="ad", fields=INSIGHT_FIELDS, time_increment=time_increment,
-            )
-            all_rows.extend(rows)
-            logger.info(f"[{market}]     {len(rows)} rows fetched")
-        except Exception as e:
-            if "3018" in str(e):
-                logger.warning(f"[{market}]     Skipping (beyond 37-month limit)")
-            else:
-                logger.error(f"[{market}]     Error: {e}")
+        acct_rows = []
+        for chunk_start, chunk_end in chunks:
+            try:
+                rows = client.get_insights(
+                    ad_account_id=acct["id"], date_start=chunk_start, date_stop=chunk_end,
+                    level="ad", fields=INSIGHT_FIELDS, time_increment=time_increment,
+                )
+                acct_rows.extend(rows)
+            except Exception as e:
+                if "3018" in str(e):
+                    logger.warning(f"[{market}]     Skipping {chunk_start}~{chunk_end} (beyond 37-month limit)")
+                elif "Please reduce the amount of data" in str(e) or \
+                     ("500" in str(e) and chunk_start != chunk_end) or \
+                     "timed out" in str(e).lower():
+                    logger.warning(
+                        f"[{market}]     HTTP 500/timeout on {acct['id']} [{chunk_start}~{chunk_end}] "
+                        f"— retrying day by day..."
+                    )
+                    for day_start, day_end in daily_chunks(chunk_start, chunk_end):
+                        try:
+                            day_rows = client.get_insights(
+                                ad_account_id=acct["id"], date_start=day_start, date_stop=day_end,
+                                level="ad", fields=INSIGHT_FIELDS, time_increment=time_increment,
+                            )
+                            acct_rows.extend(day_rows)
+                        except Exception as day_e:
+                            if "3018" in str(day_e):
+                                logger.warning(f"[{market}]     Skipping {day_start} (beyond 37-month limit)")
+                            elif "timed out" in str(day_e).lower() or "500" in str(day_e):
+                                logger.error(f"[{market}]     Error {acct['id']} [{day_start}] (day-level): {day_e}")
+                            else:
+                                logger.error(f"[{market}]     Error {acct['id']} [{day_start}]: {day_e}")
+                else:
+                    logger.error(f"[{market}]     Error: {e}")
+        all_rows.extend(acct_rows)
+        if acct_rows:
+            logger.info(f"[{market}]     {len(acct_rows)} rows fetched")
 
     if not all_rows:
         return pd.DataFrame(columns=OUTPUT_COLUMNS)
@@ -78,10 +109,6 @@ def fetch_market(market, date_start, date_stop, pa, time_increment=1):
                 if sid and sid in post_media:
                     m = post_media[sid]
                     if m.get("image_url"): creative_info_map[ad_id]["image_url"] = m["image_url"]
-                    if m.get("video_url"):
-                        key = f"__post__{sid}"
-                        creative_info_map[ad_id]["video_id"] = key
-                        video_url_map[key] = m["video_url"]
         unique_cids = list({str(r.get("campaign_id","")) for r in all_rows if r.get("campaign_id")})
         campaign_map = client.get_campaign_info(unique_cids)
     except Exception as e:

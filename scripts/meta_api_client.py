@@ -561,7 +561,7 @@ class MetaAPIClient:
     def _get(self, url: str, params: dict) -> dict:
         for attempt in range(1, self.MAX_RETRIES + 1):
             try:
-                resp = requests.get(url, params=params, timeout=30)
+                resp = requests.get(url, params=params, timeout=60)
                 resp.raise_for_status()
                 return resp.json()
             except requests.HTTPError as e:

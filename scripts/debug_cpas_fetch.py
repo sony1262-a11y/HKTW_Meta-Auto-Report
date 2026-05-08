@@ -40,28 +40,53 @@ def debug_fetch_market(market, date_start, date_stop, pa, time_increment=1):
         return summary
 
     all_raw_rows = []; all_flat_rows = []
+    from scripts.all_report import monthly_chunks, daily_chunks
+    chunks = monthly_chunks(date_start, date_stop)
+    if len(chunks) > 1:
+        logger.info(f"[{market}] Date range spans {len(chunks)} months")
+
     for acct in accounts:
-        try:
-            rows = client.get_insights(
-                ad_account_id=acct["id"], date_start=date_start, date_stop=date_stop,
-                level="ad", fields=INSIGHT_FIELDS, time_increment=time_increment,
-            )
-            logger.info(f"[{market}] {acct['name']}: {len(rows)} raw rows")
-            for r in rows:
-                flat_raw = {k: v for k, v in r.items() if not isinstance(v, list)}
-                flat_raw["_actions_json"]                 = json.dumps(r.get("actions", []))
-                flat_raw["_action_values_json"]           = json.dumps(r.get("action_values", []))
-                flat_raw["_purchase_roas_json"]           = json.dumps(r.get("purchase_roas", []))
-                flat_raw["_catalog_segment_actions_json"] = json.dumps(r.get("catalog_segment_actions", []))
-                flat_raw["_catalog_segment_value_json"]   = json.dumps(r.get("catalog_segment_value", []))
-                all_raw_rows.append(flat_raw)
-            all_flat_rows.extend(rows)
-        except Exception as e:
-            if "3018" in str(e):
-                logger.warning(f"[{market}] Skipping {acct['id']} (beyond 37-month limit)")
-            else:
-                msg = f"[{market}] Error {acct['id']}: {e}"
-                logger.error(msg); summary["errors"].append(msg)
+        acct_rows = []
+        for chunk_start, chunk_end in chunks:
+            try:
+                rows = client.get_insights(
+                    ad_account_id=acct["id"], date_start=chunk_start, date_stop=chunk_end,
+                    level="ad", fields=INSIGHT_FIELDS, time_increment=time_increment,
+                )
+                acct_rows.extend(rows)
+            except Exception as e:
+                if "3018" in str(e):
+                    logger.warning(f"[{market}] Skipping {chunk_start}~{chunk_end} (beyond 37-month limit)")
+                elif "Please reduce the amount of data" in str(e) or \
+                     ("500" in str(e) and chunk_start != chunk_end) or \
+                     "timed out" in str(e).lower():
+                    logger.warning(f"[{market}] HTTP 500/timeout on {acct['id']} [{chunk_start}~{chunk_end}] — retrying day by day...")
+                    for day_start, day_end in daily_chunks(chunk_start, chunk_end):
+                        try:
+                            day_rows = client.get_insights(
+                                ad_account_id=acct["id"], date_start=day_start, date_stop=day_end,
+                                level="ad", fields=INSIGHT_FIELDS, time_increment=time_increment,
+                            )
+                            acct_rows.extend(day_rows)
+                        except Exception as day_e:
+                            if "3018" in str(day_e):
+                                logger.warning(f"[{market}] Skipping {day_start} (beyond 37-month limit)")
+                            else:
+                                msg = f"[{market}] Error {acct['id']} [{day_start}]: {day_e}"
+                                logger.error(msg); summary["errors"].append(msg)
+                else:
+                    msg = f"[{market}] Error {acct['id']} [{chunk_start}~{chunk_end}]: {e}"
+                    logger.error(msg); summary["errors"].append(msg)
+        logger.info(f"[{market}] {acct['name']}: {len(acct_rows)} raw rows")
+        for r in acct_rows:
+            flat_raw = {k: v for k, v in r.items() if not isinstance(v, list)}
+            flat_raw["_actions_json"]                 = json.dumps(r.get("actions", []))
+            flat_raw["_action_values_json"]           = json.dumps(r.get("action_values", []))
+            flat_raw["_purchase_roas_json"]           = json.dumps(r.get("purchase_roas", []))
+            flat_raw["_catalog_segment_actions_json"] = json.dumps(r.get("catalog_segment_actions", []))
+            flat_raw["_catalog_segment_value_json"]   = json.dumps(r.get("catalog_segment_value", []))
+            all_raw_rows.append(flat_raw)
+        all_flat_rows.extend(acct_rows)
 
     summary["raw_rows"] = len(all_flat_rows)
     if not all_raw_rows:
@@ -70,7 +95,7 @@ def debug_fetch_market(market, date_start, date_stop, pa, time_increment=1):
 
     save_excel(pd.DataFrame(all_raw_rows), f"CPAS_raw_{market}_{date_start}_{date_stop}.xlsx", "Raw API Response")
 
-    story_id_map = {}; creative_info_map = {}; video_url_map = {}; campaign_map = {}
+    story_id_map = {}; creative_info_map = {}; campaign_map = {}
     try:
         unique_ad_ids = list({str(r.get("ad_id","")) for r in all_flat_rows if r.get("ad_id")})
         creative_info_map = client.get_creative_info_for_ads(unique_ad_ids)
@@ -78,8 +103,6 @@ def debug_fetch_market(market, date_start, date_stop, pa, time_increment=1):
             osi = info.get("object_story_id","")
             if osi and "_" in str(osi): story_id_map[ad_id] = osi
             elif info.get("page_id"): story_id_map[ad_id] = f"{info['page_id']}_0"
-        video_ids = list({info["video_id"] for info in creative_info_map.values() if info.get("video_id")})
-        if video_ids: video_url_map = client.get_video_urls(video_ids)
         missing_media = [
             a for a in unique_ad_ids
             if not creative_info_map.get(a,{}).get("image_url")
@@ -94,21 +117,16 @@ def debug_fetch_market(market, date_start, date_stop, pa, time_increment=1):
                 if sid and sid in post_media:
                     m = post_media[sid]
                     if m.get("image_url"): creative_info_map[ad_id]["image_url"] = m["image_url"]
-                    if m.get("video_url"):
-                        key = f"__post__{sid}"
-                        creative_info_map[ad_id]["video_id"] = key
-                        video_url_map[key] = m["video_url"]
         unique_cids = list({str(r.get("campaign_id","")) for r in all_flat_rows if r.get("campaign_id")})
         campaign_map = client.get_campaign_info(unique_cids)
         logger.info(f"[{market}] Images: {sum(1 for v in creative_info_map.values() if v.get('image_url'))}/{len(unique_ad_ids)} | "
-                    f"Videos: {sum(1 for v in video_url_map.values() if v)}/{len(video_ids) if video_ids else 0} | "
                     f"Campaigns: {sum(1 for v in campaign_map.values() if v.get('start'))}/{len(unique_cids)}")
     except Exception as e:
         logger.warning(f"[{market}] Creative/campaign lookup failed: {e}")
 
     try:
         df_t = transform(all_flat_rows, creative_info_map=creative_info_map,
-                         video_url_map=video_url_map, story_id_map=story_id_map,
+                         video_url_map=None, story_id_map=story_id_map,
                          campaign_map=campaign_map)
         summary["transformed_rows"] = len(df_t)
         save_excel(df_t, f"CPAS_transformed_{market}_{date_start}_{date_stop}.xlsx", "Transformed")
