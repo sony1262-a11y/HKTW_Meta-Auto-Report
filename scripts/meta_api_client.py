@@ -578,10 +578,16 @@ class MetaAPIClient:
                     f"HTTP {resp.status_code} | code={error_code} | "
                     f"type={error_type} | message={error_msg}"
                 )
-                if error_code in (4, 17, 32, 613) or resp.status_code in (429, 500, 503):
+                if error_code in (4, 17, 32, 613) or resp.status_code in (429, 503):
+                    # Rate limit or transient server error → retry with backoff
                     wait = self.RETRY_DELAY * attempt
                     logger.warning(f"[{self.market}] Retrying in {wait}s (attempt {attempt}/{self.MAX_RETRIES})...")
                     time.sleep(wait)
+                elif resp.status_code == 500 and "reduce the amount of data" in error_msg:
+                    # Meta data-volume limit — raise immediately so caller can split the range
+                    raise requests.HTTPError(
+                        f"HTTP 500 reduce-data: {error_msg}", response=resp
+                    )
                 else:
                     raise
         raise RuntimeError(f"[{self.market}] API call failed after {self.MAX_RETRIES} retries")

@@ -57,9 +57,7 @@ def fetch_market(market, date_start, date_stop, pa, time_increment=1):
             except Exception as e:
                 if "3018" in str(e):
                     logger.warning(f"[{market}]     Skipping {chunk_start}~{chunk_end} (beyond 37-month limit)")
-                elif "Please reduce the amount of data" in str(e) or \
-                     ("500" in str(e) and chunk_start != chunk_end) or \
-                     "timed out" in str(e).lower():
+                elif "reduce" in str(e).lower() or "500" in str(e) or "timed out" in str(e).lower():
                     logger.warning(
                         f"[{market}]     HTTP 500/timeout on {acct['id']} [{chunk_start}~{chunk_end}] "
                         f"— retrying day by day..."

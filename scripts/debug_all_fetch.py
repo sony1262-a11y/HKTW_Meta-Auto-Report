@@ -101,7 +101,7 @@ def debug_fetch_market(market, date_start, date_stop, fx_rates, pa, time_increme
     save_excel(df_raw, f"All_raw_{market}_{date_start}_{date_stop}_{breakdown}.xlsx", "Raw API Response")
 
     story_id_map = {}; page_name_map = {}; creative_info_map = {}
-    video_url_map = {}; campaign_map = {}
+    campaign_map = {}
 
     try:
         unique_ad_ids = list({str(r.get("ad_id","")) for r in all_full_rows if r.get("ad_id")})
@@ -112,8 +112,6 @@ def debug_fetch_market(market, date_start, date_stop, fx_rates, pa, time_increme
             if osi and "_" in str(osi): story_id_map[ad_id] = osi
             elif info.get("page_id"): story_id_map[ad_id] = f"{info['page_id']}_0"
         page_name_map = client.get_page_names_for_ads(unique_ad_ids, story_id_map=story_id_map)
-        video_ids = list({info["video_id"] for info in creative_info_map.values() if info.get("video_id")})
-        if video_ids: video_url_map = client.get_video_urls(video_ids)
         missing_media = [
             a for a in unique_ad_ids
             if not creative_info_map.get(a,{}).get("image_url")
@@ -128,17 +126,12 @@ def debug_fetch_market(market, date_start, date_stop, fx_rates, pa, time_increme
                 if sid and sid in post_media:
                     m = post_media[sid]
                     if m.get("image_url"): creative_info_map[ad_id]["image_url"] = m["image_url"]
-                    if m.get("video_url"):
-                        key = f"__post__{sid}"
-                        creative_info_map[ad_id]["video_id"] = key
-                        video_url_map[key] = m["video_url"]
         unique_cids = list({str(r.get("campaign_id","")) for r in all_full_rows if r.get("campaign_id")})
         campaign_map = client.get_campaign_info(unique_cids)
         logger.info(
             f"[{market}] Post URLs: {sum(1 for v in story_id_map.values() if '_' in v and not v.endswith('_0'))}/{len(unique_ad_ids)} | "
             f"Pages: {sum(1 for v in page_name_map.values() if v)}/{len(unique_ad_ids)} | "
             f"Images: {sum(1 for v in creative_info_map.values() if v.get('image_url'))}/{len(unique_ad_ids)} | "
-            f"Videos: {sum(1 for v in video_url_map.values() if v)}/{len(video_ids) if video_ids else 0} | "
             f"Campaigns: {sum(1 for v in campaign_map.values() if v.get('start'))}/{len(unique_cids)}"
         )
     except Exception as e:
@@ -149,7 +142,7 @@ def debug_fetch_market(market, date_start, date_stop, fx_rates, pa, time_increme
     try:
         df_t = transform(
             all_full_rows, fx_rates=fx_rates, page_name_map=page_name_map,
-            creative_info_map=creative_info_map, video_url_map=video_url_map,
+            creative_info_map=creative_info_map, video_url_map=None,
             story_id_map=story_id_map, campaign_map=campaign_map,
         )
         if breakdown == "age_gender" and "Platform" in df_t.columns:
