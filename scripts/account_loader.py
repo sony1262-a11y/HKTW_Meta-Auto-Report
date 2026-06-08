@@ -1,33 +1,46 @@
 """
 HKTW Meta Auto Report - Account Loader
+Reads account list from local control_panel/ folder in the repo.
+No dependency on Power Automate download.
 """
 import io
+import os
 import logging
 import pandas as pd
-from config.settings import SP_PATHS, SP_CONTROL_FILES
 
 logger = logging.getLogger(__name__)
 SHEET_NAME       = "Ad Accounts"
 REQUIRED_COLUMNS = ["Account ID", "Account Name", "Type", "Enabled"]
 
+# Resolve control_panel path relative to repo root
+_REPO_ROOT    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CONTROL_PANEL = os.path.join(_REPO_ROOT, "control_panel")
 
-def load_accounts(market: str, pa_client, report_type: str | None = None) -> list[dict]:
-    filename  = SP_CONTROL_FILES[market]
-    sp_folder = SP_PATHS["control_panel"]
-    logger.info(f"[{market}] Loading account list from SharePoint: {filename}")
+CONTROL_FILES = {
+    "HK": "HK_Ad_Accounts.xlsx",
+    "TW": "TW_Ad_Accounts.xlsx",
+}
+
+
+def load_accounts(market: str, pa_client=None, report_type: str | None = None) -> list[dict]:
+    """
+    Load enabled ad accounts for the given market from the local control_panel/ folder.
+    pa_client is accepted for API compatibility but ignored.
+    """
+    filename  = CONTROL_FILES.get(market)
+    if not filename:
+        logger.error(f"[{market}] No control file defined for market '{market}'")
+        return []
+
+    filepath = os.path.join(CONTROL_PANEL, filename)
+    if not os.path.exists(filepath):
+        logger.error(f"[{market}] Control Panel file not found: {filepath}")
+        logger.error(f"[{market}] Please add {filename} to the control_panel/ folder in the repo")
+        return []
+
+    logger.info(f"[{market}] Loading account list from: control_panel/{filename}")
     try:
-        data = pa_client.download_bytes(sp_folder, filename)
-    except EnvironmentError as e:
-        logger.error(f"[{market}] PA_DOWNLOAD_URL not set: {e}")
-        return []
-    except Exception as e:
-        logger.error(f"[{market}] Failed to download {filename}: {e}")
-        return []
-    if data is None:
-        logger.error(f"[{market}] Control Panel file not found: {sp_folder}/{filename}")
-        return []
-    try:
-        df = pd.read_excel(io.BytesIO(data), sheet_name=SHEET_NAME, dtype=str)
+        df = pd.read_excel(filepath, sheet_name=SHEET_NAME, dtype=str)
         df.columns = [c.strip() for c in df.columns]
         missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
         if missing:

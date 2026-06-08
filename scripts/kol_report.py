@@ -15,13 +15,11 @@ from scripts.account_loader import load_accounts
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-DEDUPE_KEYS = ["Ad Account ID", "Ad ID", "Date", "Platform", "Placement"]
-SP_FOLDER   = SP_PATHS["kol"]
-OUTPUT_FILE = "HKTW_Meta_KOL_Data.xlsx"
-SHEET_NAME  = "KOL Data"
-FX_SP_FOLDER = SP_PATHS["control_panel"]
-FX_FILE     = "KOL_FX_Rates.xlsx"
-FX_SHEET    = "FX Rates"
+DEDUPE_KEYS  = ["Ad Account ID", "Ad ID", "Date", "Platform", "Placement"]
+SP_FOLDER    = SP_PATHS["kol"]
+OUTPUT_FILE  = "HKTW_Meta_KOL_Data.xlsx"
+SHEET_NAME   = "KOL Data"
+FX_SHEET     = "FX Rates"
 
 INSIGHT_FIELDS = [
     "account_id", "account_name", "campaign_id", "campaign_name",
@@ -36,18 +34,16 @@ INSIGHT_FIELDS = [
 BREAKDOWNS = ["publisher_platform", "platform_position"]
 
 
-def load_fx_rates(pa):
-    logger.info(f"Loading FX rates from SharePoint: {FX_FILE}")
-    try:
-        data = pa.download_bytes(FX_SP_FOLDER, FX_FILE)
-    except Exception as e:
-        logger.warning(f"FX load failed: {e}")
+def load_fx_rates(pa=None):
+    """Load FX rates from local control_panel/KOL_FX_Rates.xlsx in the repo."""
+    _repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    filepath   = os.path.join(_repo_root, "control_panel", "KOL_FX_Rates.xlsx")
+    if not os.path.exists(filepath):
+        logger.warning(f"FX rates file not found: {filepath} — USD conversion skipped")
         return {}
-    if data is None:
-        logger.warning("FX rate file not found — USD conversion skipped")
-        return {}
+    logger.info(f"Loading FX rates from: control_panel/KOL_FX_Rates.xlsx")
     try:
-        df = pd.read_excel(io.BytesIO(data), sheet_name=FX_SHEET)
+        df = pd.read_excel(filepath, sheet_name=FX_SHEET)
         df.columns = [c.strip() for c in df.columns]
         rates = {}
         for _, row in df.iterrows():
@@ -100,24 +96,19 @@ def fetch_market(market, date_start, date_stop, fx_rates, pa, time_increment=1):
             if osi and "_" in str(osi): story_id_map[ad_id] = osi
             elif info.get("page_id"): story_id_map[ad_id] = f"{info['page_id']}_0"
         page_name_map = client.get_page_names_for_ads(unique_ad_ids, story_id_map=story_id_map)
-        missing_media = [
+        # Fallback: for ads with no image_url, try post attachment thumbnail
+        missing_img = [
             ad_id for ad_id in unique_ad_ids
-            if not creative_info_map.get(ad_id,{}).get("image_url")
-            and not creative_info_map.get(ad_id,{}).get("video_id")
-            and story_id_map.get(ad_id,"")
+            if not creative_info_map.get(ad_id, {}).get("image_url")
+            and story_id_map.get(ad_id, "")
         ]
-        if missing_media:
-            msi = list({story_id_map[a] for a in missing_media if story_id_map.get(a)})
+        if missing_img:
+            msi = list({story_id_map[a] for a in missing_img if story_id_map.get(a)})
             post_media = client.get_post_media(msi)
-            for ad_id in missing_media:
-                sid = story_id_map.get(ad_id,"")
-                if sid and sid in post_media:
-                    m = post_media[sid]
-                    if m.get("image_url"): creative_info_map[ad_id]["image_url"] = m["image_url"]
-                    if m.get("video_url"):
-                        key = f"__post__{sid}"
-                        creative_info_map[ad_id]["video_id"] = key
-                        video_url_map[key] = m["video_url"]
+            for ad_id in missing_img:
+                sid = story_id_map.get(ad_id, "")
+                if sid and sid in post_media and post_media[sid].get("image_url"):
+                    creative_info_map[ad_id]["image_url"] = post_media[sid]["image_url"]
         unique_cids = list({str(r.get("campaign_id","")) for r in all_rows if r.get("campaign_id")})
         campaign_map = client.get_campaign_info(unique_cids)
     except Exception as e:
@@ -131,10 +122,7 @@ def fetch_market(market, date_start, date_stop, fx_rates, pa, time_increment=1):
 
 
 def _migrate_existing_schema(df):
-    """Bring older SharePoint file up to current OUTPUT_COLUMNS schema."""
     from scripts.kol_transformer import get_quarter, get_duration_group
-    rename_map = {}  # no column renames needed
-    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
     for col in OUTPUT_COLUMNS:
         if col not in df.columns:
             df[col] = ""
@@ -156,8 +144,7 @@ def load_existing(pa):
     try:
         df = pd.read_excel(io.BytesIO(data), sheet_name=SHEET_NAME, dtype=str)
         logger.info(f"Loaded {len(df)} existing rows")
-        df = _migrate_existing_schema(df)
-        return df
+        return _migrate_existing_schema(df)
     except Exception as e:
         logger.error(f"Failed to read existing: {e}")
         return pd.DataFrame(columns=OUTPUT_COLUMNS)
@@ -193,18 +180,16 @@ def main():
     markets_to_run = list(MARKETS.keys()) if market == "ALL" else [market]
     logger.info(f"KOL Report | {markets_to_run} | {date_start} → {date_stop}")
     pa       = PowerAutomateClient()
-    fx_rates = load_fx_rates(pa)
+    fx_rates = load_fx_rates()   # no longer needs pa
     new_frames = []
     for m in markets_to_run:
         df_m = fetch_market(m, date_start, date_stop, fx_rates, pa, time_increment)
         if not df_m.empty: new_frames.append(df_m)
     new_data = pd.concat(new_frames, ignore_index=True) if new_frames else pd.DataFrame(columns=OUTPUT_COLUMNS)
     logger.info(f"Total new rows: {len(new_data)}")
-    # ── SharePoint accumulation skipped (upload disabled) ──
     merged      = new_data
     excel_bytes = save_to_excel(merged)
 
-    # ── Save timestamped artifact locally ──
     from datetime import datetime as _dt
     mkt_str   = market if market != "ALL" else "HKTW"
     timestamp = _dt.utcnow().strftime("%Y%m%d_%H%M")
@@ -215,8 +200,6 @@ def main():
     with open(artifact_path, "wb") as f:
         f.write(excel_bytes)
     logger.info(f"Artifact saved: {artifact_path} ({len(merged)} rows)")
-
-    # ── SharePoint upload temporarily disabled ──
     # pa.upload_bytes(excel_bytes, SP_FOLDER, OUTPUT_FILE)
     logger.info("KOL Report completed (SharePoint upload skipped).")
 
