@@ -45,13 +45,26 @@ def load_accounts(market: str, pa_client, report_type: str | None = None) -> lis
             acct_type = str(row["Type"]).strip()
             if not acct_id.startswith("act_"):
                 acct_id = f"act_{acct_id}"
-            accounts.append({"id": acct_id, "name": acct_name, "type": acct_type})
+            # Large_Account: if column exists and value is TRUE, mark as large
+            large = False
+            if "Large_Account" in df.columns:
+                val = str(row.get("Large_Account", "")).strip().upper()
+                large = val == "TRUE"
+            accounts.append({
+                "id":    acct_id,
+                "name":  acct_name,
+                "type":  acct_type,
+                "large": large,
+            })
+        large_count = sum(1 for a in accounts if a["large"])
         logger.info(
             f"[{market}] Loaded {len(accounts)} enabled"
-            f"{' ' + report_type if report_type else ''} accounts from {filename}"
+            f"{' ' + report_type if report_type else ''} accounts"
+            f" ({large_count} large) from {filename}"
         )
         for a in accounts:
-            logger.info(f"  {a['id']} | {a['name']} | type={a['type']}")
+            flag = " [LARGE]" if a["large"] else ""
+            logger.info(f"  {a['id']} | {a['name']} | type={a['type']}{flag}")
         return accounts
     except Exception as e:
         logger.error(f"[{market}] Failed to parse {filename}: {e}")

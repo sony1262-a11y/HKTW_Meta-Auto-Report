@@ -32,7 +32,6 @@ INSIGHT_FIELDS = [
 
 
 def _is_data_volume_error(e):
-    """Return True if the exception is a Meta HTTP 500 data-volume limit or timeout."""
     s = str(e).lower()
     return "reduce" in s or ("500" in s and "data" in s) or "timed out" in s
 
@@ -42,47 +41,65 @@ def fetch_market(market, date_start, date_stop, pa, time_increment=1):
     accounts = load_accounts(market, pa, report_type="CPAS")
     if not accounts:
         return pd.DataFrame(columns=OUTPUT_COLUMNS)
-    client   = MetaAPIClient(market)
+    client = MetaAPIClient(market)
     all_rows = []
 
     from scripts.all_report import monthly_chunks, daily_chunks
     chunks = monthly_chunks(date_start, date_stop)
     if len(chunks) > 1:
-        logger.info(f"[{market}] Date range spans {len(chunks)} months — fetching month by month")
+        logger.info(f"[{market}] Date range spans {len(chunks)} months")
 
     for acct in accounts:
-        logger.info(f"[{market}]   -> {acct['name']} ({acct['id']})")
+        logger.info(f"[{market}]   -> {acct['name']} ({acct['id']})"
+                    + (" [LARGE — daily chunks]" if acct["large"] else ""))
         acct_rows = []
-        for chunk_start, chunk_end in chunks:
-            try:
-                rows = client.get_insights(
-                    ad_account_id=acct["id"], date_start=chunk_start, date_stop=chunk_end,
-                    level="ad", fields=INSIGHT_FIELDS, time_increment=time_increment,
-                )
-                acct_rows.extend(rows)
-            except Exception as e:
-                if "3018" in str(e):
-                    logger.warning(f"[{market}]     Skipping {chunk_start}~{chunk_end} (beyond 37-month limit)")
-                elif _is_data_volume_error(e):
-                    # HTTP 500 / timeout: data too large — fall back to day-by-day fetch
-                    logger.warning(
-                        f"[{market}]     HTTP 500/timeout on {acct['id']} [{chunk_start}~{chunk_end}] "
-                        f"— retrying day by day..."
+
+        if acct["large"]:
+            # Large account: skip monthly, go straight to daily chunks
+            for chunk_start, chunk_end in chunks:
+                for day_start, day_end in daily_chunks(chunk_start, chunk_end):
+                    try:
+                        day_rows = client.get_insights(
+                            ad_account_id=acct["id"], date_start=day_start, date_stop=day_end,
+                            level="ad", fields=INSIGHT_FIELDS, time_increment=time_increment,
+                        )
+                        acct_rows.extend(day_rows)
+                    except Exception as day_e:
+                        if "3018" in str(day_e):
+                            logger.warning(f"[{market}]     Skipping {day_start} (beyond 37-month limit)")
+                        else:
+                            logger.error(f"[{market}]     Error {acct['id']} [{day_start}]: {day_e}")
+        else:
+            # Normal account: try monthly, fallback to daily on 500/timeout
+            for chunk_start, chunk_end in chunks:
+                try:
+                    rows = client.get_insights(
+                        ad_account_id=acct["id"], date_start=chunk_start, date_stop=chunk_end,
+                        level="ad", fields=INSIGHT_FIELDS, time_increment=time_increment,
                     )
-                    for day_start, day_end in daily_chunks(chunk_start, chunk_end):
-                        try:
-                            day_rows = client.get_insights(
-                                ad_account_id=acct["id"], date_start=day_start, date_stop=day_end,
-                                level="ad", fields=INSIGHT_FIELDS, time_increment=time_increment,
-                            )
-                            acct_rows.extend(day_rows)
-                        except Exception as day_e:
-                            if "3018" in str(day_e):
-                                logger.warning(f"[{market}]     Skipping {day_start} (beyond 37-month limit)")
-                            else:
-                                logger.error(f"[{market}]     Error {acct['id']} [{day_start}]: {day_e}")
-                else:
-                    logger.error(f"[{market}]     Error: {e}")
+                    acct_rows.extend(rows)
+                except Exception as e:
+                    if "3018" in str(e):
+                        logger.warning(f"[{market}]     Skipping {chunk_start}~{chunk_end} (beyond 37-month limit)")
+                    elif _is_data_volume_error(e):
+                        logger.warning(
+                            f"[{market}]     HTTP 500/timeout [{chunk_start}~{chunk_end}] — retrying day by day..."
+                        )
+                        for day_start, day_end in daily_chunks(chunk_start, chunk_end):
+                            try:
+                                day_rows = client.get_insights(
+                                    ad_account_id=acct["id"], date_start=day_start, date_stop=day_end,
+                                    level="ad", fields=INSIGHT_FIELDS, time_increment=time_increment,
+                                )
+                                acct_rows.extend(day_rows)
+                            except Exception as day_e:
+                                if "3018" in str(day_e):
+                                    logger.warning(f"[{market}]     Skipping {day_start} (beyond 37-month limit)")
+                                else:
+                                    logger.error(f"[{market}]     Error {acct['id']} [{day_start}]: {day_e}")
+                    else:
+                        logger.error(f"[{market}]     Error: {e}")
+
         all_rows.extend(acct_rows)
         if acct_rows:
             logger.info(f"[{market}]     {len(acct_rows)} rows fetched")
@@ -98,7 +115,6 @@ def fetch_market(market, date_start, date_stop, pa, time_increment=1):
             osi = info.get("object_story_id","")
             if osi and "_" in str(osi): story_id_map[ad_id] = osi
             elif info.get("page_id"): story_id_map[ad_id] = f"{info['page_id']}_0"
-        # Fallback: for ads still missing image_url, try post attachment thumbnail
         missing_img = [
             ad_id for ad_id in unique_ad_ids
             if not creative_info_map.get(ad_id, {}).get("image_url")
@@ -124,10 +140,7 @@ def fetch_market(market, date_start, date_stop, pa, time_increment=1):
 
 
 def _migrate_existing_schema(df):
-    """Bring older SharePoint file up to current OUTPUT_COLUMNS schema."""
     from scripts.cpas_transformer import get_duration_group, get_quarter
-    rename_map = {}  # no column renames needed
-    df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
     for col in OUTPUT_COLUMNS:
         if col not in df.columns:
             df[col] = ""
@@ -144,13 +157,11 @@ def _migrate_existing_schema(df):
 def load_existing(pa):
     data = pa.download_bytes(SP_FOLDER, OUTPUT_FILE)
     if data is None:
-        logger.info("No existing file — starting fresh")
         return pd.DataFrame(columns=OUTPUT_COLUMNS)
     try:
         df = pd.read_excel(io.BytesIO(data), sheet_name=SHEET_NAME, dtype=str)
         logger.info(f"Loaded {len(df)} existing rows")
-        df = _migrate_existing_schema(df)
-        return df
+        return _migrate_existing_schema(df)
     except Exception as e:
         logger.error(f"Failed to read existing: {e}")
         return pd.DataFrame(columns=OUTPUT_COLUMNS)
@@ -192,11 +203,9 @@ def main():
         if not df_m.empty: new_frames.append(df_m)
     new_data = pd.concat(new_frames, ignore_index=True) if new_frames else pd.DataFrame(columns=OUTPUT_COLUMNS)
     logger.info(f"Total new rows: {len(new_data)}")
-    # ── SharePoint accumulation skipped (upload disabled) ──
     merged      = new_data
     excel_bytes = save_to_excel(merged)
 
-    # ── Save timestamped artifact locally ──
     from datetime import datetime as _dt
     mkt_str   = market if market != "ALL" else "HKTW"
     timestamp = _dt.utcnow().strftime("%Y%m%d_%H%M")
@@ -207,8 +216,6 @@ def main():
     with open(artifact_path, "wb") as f:
         f.write(excel_bytes)
     logger.info(f"Artifact saved: {artifact_path} ({len(merged)} rows)")
-
-    # ── SharePoint upload temporarily disabled ──
     # pa.upload_bytes(excel_bytes, SP_FOLDER, OUTPUT_FILE)
     logger.info("CPAS Report completed (SharePoint upload skipped).")
 
