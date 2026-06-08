@@ -71,6 +71,12 @@ def daily_chunks(chunk_start, chunk_end):
     return days
 
 
+def _is_data_volume_error(e):
+    """Return True if the exception is a Meta HTTP 500 data-volume limit."""
+    s = str(e).lower()
+    return "reduce" in s or ("500" in s and "data" in s) or "timed out" in s
+
+
 def load_fx_rates(pa):
     logger.info(f"Loading FX rates from SharePoint: {FX_FILE}")
     data = pa.download_bytes(FX_SP_FOLDER, FX_FILE)
@@ -117,10 +123,10 @@ def fetch_market(market, date_start, date_stop, fx_rates, pa, time_increment=1, 
             except Exception as e:
                 if "3018" in str(e):
                     logger.warning(f"[{market}] Skipping {chunk_start}~{chunk_end} (beyond 37-month limit)")
-                elif "Please reduce the amount of data" in str(e) or ("500" in str(e) and chunk_start != chunk_end):
-                    # HTTP 500: too much data — fall back to day-by-day fetch
+                elif _is_data_volume_error(e):
+                    # HTTP 500 / timeout: too much data — fall back to day-by-day fetch
                     logger.warning(
-                        f"[{market}] HTTP 500 on {acct['id']} [{chunk_start}~{chunk_end}] "
+                        f"[{market}] HTTP 500/timeout on {acct['id']} [{chunk_start}~{chunk_end}] "
                         f"— retrying day by day..."
                     )
                     for day_start, day_end in daily_chunks(chunk_start, chunk_end):
@@ -158,14 +164,14 @@ def fetch_market(market, date_start, date_stop, fx_rates, pa, time_increment=1, 
         # Fallback: for ads with no image_url, try fetching post attachment thumbnail
         missing_img = [
             a for a in unique_ad_ids
-            if not creative_info_map.get(a,{}).get("image_url")
-            and story_id_map.get(a,"")
+            if not creative_info_map.get(a, {}).get("image_url")
+            and story_id_map.get(a, "")
         ]
         if missing_img:
             msi = list({story_id_map[a] for a in missing_img if story_id_map.get(a)})
             post_media = client.get_post_media(msi)
             for ad_id in missing_img:
-                sid = story_id_map.get(ad_id,"")
+                sid = story_id_map.get(ad_id, "")
                 if sid and sid in post_media and post_media[sid].get("image_url"):
                     creative_info_map[ad_id]["image_url"] = post_media[sid]["image_url"]
         unique_cids = list({str(r.get("campaign_id","")) for r in all_rows if r.get("campaign_id")})
@@ -196,44 +202,25 @@ def _output_filename(time_increment, breakdown):
     return f"HKTW_Meta_All_{ti}_{bd}.xlsx"
 
 
-def migrate_existing_schema(df: "pd.DataFrame") -> "pd.DataFrame":
-    """
-    Bring a DataFrame loaded from an older SharePoint file up to the current
-    OUTPUT_COLUMNS schema.  Safe to call even if the file is already current.
-    """
+def migrate_existing_schema(df):
+    """Bring an older SharePoint file up to the current OUTPUT_COLUMNS schema."""
     from scripts.kol_transformer import get_quarter, get_duration_group
-
-    # ── 1. Rename old column names to new ones ───────────────────────────────
-    rename_map = {
-        "Creative Video URL": "Creative Video URL (Permalink)",   # old → new split column
-    }
+    rename_map = {}  # no column renames needed
     df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
-
-    # ── 2. Add missing columns with empty default ────────────────────────────
     for col in OUTPUT_COLUMNS:
         if col not in df.columns:
             df[col] = ""
-
-    # ── 3. Backfill derived columns for old rows that are empty ─────────────
-    # Quarter — derive from Date column
     empty_quarter = df["Quarter"].isna() | (df["Quarter"].astype(str).str.strip() == "")
     if empty_quarter.any():
         dates = pd.to_datetime(df.loc[empty_quarter, "Date"], errors="coerce")
         df.loc[empty_quarter, "Quarter"] = dates.apply(get_quarter)
         filled = empty_quarter.sum() - (df["Quarter"].isna() | (df["Quarter"].astype(str).str.strip() == "")).sum()
         logger.info(f"Schema migration: filled {filled} Quarter values from Date")
-
-    # Duration Group — derive from Creative Type
     empty_dur = df["Duration Group"].isna() | (df["Duration Group"].astype(str).str.strip() == "")
     if empty_dur.any() and "Creative Type" in df.columns:
         df.loc[empty_dur, "Duration Group"] = df.loc[empty_dur, "Creative Type"].fillna("").apply(get_duration_group)
         filled = empty_dur.sum() - (df["Duration Group"].isna() | (df["Duration Group"].astype(str).str.strip() == "")).sum()
         logger.info(f"Schema migration: filled {filled} Duration Group values from Creative Type")
-
-    # Media Buying — derive from buying_type is not available after the fact,
-    # so leave as empty string for old rows (acceptable — only affects historical data)
-
-    # ── 4. Reorder to current OUTPUT_COLUMNS (drop any extra legacy columns) ─
     df = df[OUTPUT_COLUMNS]
     return df
 
@@ -303,7 +290,7 @@ def main():
     merged      = new_data
     excel_bytes = save_to_excel(merged)
 
-    # ── Save timestamped artifact locally (for GitHub Actions artifact download) ──
+    # ── Save timestamped artifact locally ──
     from datetime import datetime as _dt
     mkt_str   = market if market != "ALL" else "HKTW"
     ti_str    = "monthly" if str(time_increment) == "monthly" else "daily"

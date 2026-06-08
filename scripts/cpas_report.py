@@ -31,6 +31,12 @@ INSIGHT_FIELDS = [
 ]
 
 
+def _is_data_volume_error(e):
+    """Return True if the exception is a Meta HTTP 500 data-volume limit or timeout."""
+    s = str(e).lower()
+    return "reduce" in s or ("500" in s and "data" in s) or "timed out" in s
+
+
 def fetch_market(market, date_start, date_stop, pa, time_increment=1):
     logger.info(f"[{market}] Fetching CPAS data {date_start} -> {date_stop}")
     accounts = load_accounts(market, pa, report_type="CPAS")
@@ -57,7 +63,8 @@ def fetch_market(market, date_start, date_stop, pa, time_increment=1):
             except Exception as e:
                 if "3018" in str(e):
                     logger.warning(f"[{market}]     Skipping {chunk_start}~{chunk_end} (beyond 37-month limit)")
-                elif "reduce" in str(e).lower() or "500" in str(e) or "timed out" in str(e).lower():
+                elif _is_data_volume_error(e):
+                    # HTTP 500 / timeout: data too large — fall back to day-by-day fetch
                     logger.warning(
                         f"[{market}]     HTTP 500/timeout on {acct['id']} [{chunk_start}~{chunk_end}] "
                         f"— retrying day by day..."
@@ -72,8 +79,6 @@ def fetch_market(market, date_start, date_stop, pa, time_increment=1):
                         except Exception as day_e:
                             if "3018" in str(day_e):
                                 logger.warning(f"[{market}]     Skipping {day_start} (beyond 37-month limit)")
-                            elif "timed out" in str(day_e).lower() or "500" in str(day_e):
-                                logger.error(f"[{market}]     Error {acct['id']} [{day_start}] (day-level): {day_e}")
                             else:
                                 logger.error(f"[{market}]     Error {acct['id']} [{day_start}]: {day_e}")
                 else:
@@ -93,20 +98,19 @@ def fetch_market(market, date_start, date_stop, pa, time_increment=1):
             osi = info.get("object_story_id","")
             if osi and "_" in str(osi): story_id_map[ad_id] = osi
             elif info.get("page_id"): story_id_map[ad_id] = f"{info['page_id']}_0"
-        missing_media = [
+        # Fallback: for ads still missing image_url, try post attachment thumbnail
+        missing_img = [
             ad_id for ad_id in unique_ad_ids
-            if not creative_info_map.get(ad_id,{}).get("image_url")
-            and not creative_info_map.get(ad_id,{}).get("video_id")
-            and story_id_map.get(ad_id,"")
+            if not creative_info_map.get(ad_id, {}).get("image_url")
+            and story_id_map.get(ad_id, "")
         ]
-        if missing_media:
-            msi = list({story_id_map[a] for a in missing_media if story_id_map.get(a)})
+        if missing_img:
+            msi = list({story_id_map[a] for a in missing_img if story_id_map.get(a)})
             post_media = client.get_post_media(msi)
-            for ad_id in missing_media:
-                sid = story_id_map.get(ad_id,"")
-                if sid and sid in post_media:
-                    m = post_media[sid]
-                    if m.get("image_url"): creative_info_map[ad_id]["image_url"] = m["image_url"]
+            for ad_id in missing_img:
+                sid = story_id_map.get(ad_id, "")
+                if sid and sid in post_media and post_media[sid].get("image_url"):
+                    creative_info_map[ad_id]["image_url"] = post_media[sid]["image_url"]
         unique_cids = list({str(r.get("campaign_id","")) for r in all_rows if r.get("campaign_id")})
         campaign_map = client.get_campaign_info(unique_cids)
     except Exception as e:
