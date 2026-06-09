@@ -83,7 +83,7 @@ class MetaAPIClient:
             logger.warning(f"[{self.market}] Could not fetch info for {ad_account_id}: {e}")
             return {}
 
-    # ── Insights ─────────────────────────────────────────────────────────────
+    # ── Insights (synchronous) ───────────────────────────────────────────────
 
     def get_insights(
         self,
@@ -118,22 +118,107 @@ class MetaAPIClient:
         )
         return rows
 
+    # ── Insights (asynchronous) ──────────────────────────────────────────────
+
+    def get_insights_async(
+        self,
+        ad_account_id: str,
+        date_start: str,
+        date_stop: str,
+        level: str = "ad",
+        fields: list[str] | None = None,
+        breakdowns: list[str] | None = None,
+        filtering: list[dict] | None = None,
+        time_increment: str | int = 1,
+        poll_interval: int = 10,
+        max_wait: int = 3600,
+    ) -> list[dict]:
+        """
+        Submit a Meta Async Insights job and poll until complete.
+        Use for large accounts where synchronous requests return HTTP 500
+        'Please reduce the amount of data'.
+
+        Flow:
+          1. POST /{account}/insights  → report_run_id
+          2. Poll GET /{report_run_id} until async_status == 'Job Complete'
+          3. GET /{report_run_id}/insights (paginated) → rows
+        """
+        if fields is None:
+            fields = self._default_fields(level)
+
+        # ── Step 1: Submit async job ─────────────────────────────────────────
+        url = f"{META_API_BASE}/{ad_account_id}/insights"
+        params = {
+            "level":          level,
+            "fields":         ",".join(fields),
+            "time_range":     f'{{"since":"{date_start}","until":"{date_stop}"}}',
+            "time_increment": time_increment,
+            "access_token":   self.access_token,
+            "limit":          500,
+        }
+        if breakdowns:
+            params["breakdowns"] = ",".join(breakdowns)
+        if filtering:
+            params["filtering"] = json.dumps(filtering)
+
+        logger.info(
+            f"[{self.market}] {ad_account_id} | {date_start}~{date_stop} | "
+            f"submitting async job..."
+        )
+        resp = requests.post(url, data=params, timeout=60)
+        resp.raise_for_status()
+        job_data = resp.json()
+        report_run_id = job_data.get("report_run_id")
+        if not report_run_id:
+            raise RuntimeError(
+                f"[{self.market}] Async job submission failed — no report_run_id in: {job_data}"
+            )
+        logger.info(f"[{self.market}] Async job submitted: {report_run_id}")
+
+        # ── Step 2: Poll until Job Complete ──────────────────────────────────
+        elapsed = 0
+        while elapsed < max_wait:
+            time.sleep(poll_interval)
+            elapsed += poll_interval
+            status = self._get(
+                f"{META_API_BASE}/{report_run_id}",
+                {"access_token": self.access_token},
+            )
+            async_status = status.get("async_status", "")
+            pct          = status.get("async_percent_completion", 0)
+            logger.info(
+                f"[{self.market}] Job {report_run_id}: {async_status} ({pct}%)"
+            )
+            if async_status == "Job Complete":
+                break
+            if async_status in ("Job Failed", "Job Skipped"):
+                raise RuntimeError(
+                    f"[{self.market}] Async job {async_status}: {status}"
+                )
+        else:
+            raise RuntimeError(
+                f"[{self.market}] Async job {report_run_id} timed out after {max_wait}s"
+            )
+
+        # ── Step 3: Fetch results (paginated) ────────────────────────────────
+        results_url    = f"{META_API_BASE}/{report_run_id}/insights"
+        results_params = {"access_token": self.access_token, "limit": 500}
+        rows = self._paginate(results_url, results_params)
+        logger.info(
+            f"[{self.market}] {ad_account_id} | {date_start}~{date_stop} | "
+            f"async | {len(rows)} rows"
+        )
+        return rows
+
     # ── Campaign info ─────────────────────────────────────────────────────────
 
     def get_campaign_info(self, campaign_ids: list[str]) -> dict[str, dict]:
-        """
-        Batch query campaign-level fields: start_time, stop_time, budget.
-        Returns { campaign_id: {"start": str, "stop": str, "budget": str} }
-        Budget value is in account currency (already in full units, not cents for most currencies).
-        """
         unique_ids = list(set(str(c) for c in campaign_ids if c))
         if not unique_ids:
             return {}
-
         logger.info(f"[{self.market}] Fetching campaign info for {len(unique_ids)} campaigns...")
         result: dict[str, dict] = {}
         empty = {"start": "", "stop": "", "budget": ""}
-
         for i in range(0, len(unique_ids), self.BATCH_SIZE):
             chunk = unique_ids[i:i + self.BATCH_SIZE]
             batch = [
@@ -172,7 +257,6 @@ class MetaAPIClient:
                 except Exception:
                     result[cid] = dict(empty)
             time.sleep(0.3)
-
         resolved = sum(1 for v in result.values() if v.get("start"))
         logger.info(f"[{self.market}] get_campaign_info: {resolved}/{len(unique_ids)} campaigns resolved")
         return result
@@ -218,11 +302,6 @@ class MetaAPIClient:
         return self._batch_get_creative_info(unique_ids)
 
     def get_video_urls(self, video_ids: list[str]) -> dict[str, dict]:
-        """
-        Fetch both permalink URL (stable, facebook.com domain) and
-        source URL (direct CDN .mp4, expires within hours) for each video.
-        Returns { video_id: {"permalink": str, "source": str} }
-        """
         unique_ids = list(set(str(v) for v in video_ids if v and not str(v).startswith("__post__")))
         if not unique_ids:
             return {}
@@ -251,7 +330,7 @@ class MetaAPIClient:
                 except Exception:
                     result[vid] = {"permalink": "", "source": ""}
             time.sleep(0.5)
-        resolved_pl = sum(1 for v in result.values() if v.get("permalink"))
+        resolved_pl  = sum(1 for v in result.values() if v.get("permalink"))
         resolved_src = sum(1 for v in result.values() if v.get("source"))
         logger.info(
             f"[{self.market}] get_video_urls: "
@@ -260,7 +339,6 @@ class MetaAPIClient:
         return result
 
     def get_video_source_urls(self, video_ids: list[str]) -> dict[str, str]:
-        """Direct downloadable CDN source URLs (.mp4/.mov). Expire within hours."""
         unique_ids = [str(v) for v in video_ids if v and not str(v).startswith("__post__")]
         if not unique_ids:
             return {}
@@ -303,10 +381,6 @@ class MetaAPIClient:
         return result
 
     def get_post_media(self, story_ids: list[str]) -> dict[str, dict]:
-        """
-        Fallback: query post attachments via object_story_id ({page_id}_{post_id}).
-        Returns { story_id: { "image_url": str, "video_url": str } }
-        """
         unique_ids = [s for s in story_ids if s and "_" in str(s) and not str(s).endswith("_0")]
         if not unique_ids:
             return {}
@@ -366,11 +440,6 @@ class MetaAPIClient:
     # ── Internal batch helpers ────────────────────────────────────────────────
 
     def _batch_post(self, batch: list[dict], label: str = "") -> list[dict] | None:
-        """
-        POST a Meta batch request with automatic retry on app-level rate limit (code=4).
-        Returns the responses list, or None if all retries are exhausted.
-        Retries up to 3 times with exponential backoff (60s, 120s, 180s).
-        """
         for attempt in range(1, 4):
             try:
                 resp = requests.post(
@@ -380,7 +449,6 @@ class MetaAPIClient:
                 )
                 resp.raise_for_status()
                 responses = resp.json()
-                # Detect app-level rate limit in any item
                 rate_limited = any(item and item.get("code") == 4 for item in responses)
                 if rate_limited:
                     wait = 60 * attempt
@@ -408,7 +476,7 @@ class MetaAPIClient:
                     "method":       "GET",
                     "relative_url": (
                         f"{ad_id}?fields=creative{{"
-                        f"actor_id,"            # Page ID for ALL ad types incl. dark posts
+                        f"actor_id,"
                         f"object_story_spec{{"
                         f"page_id,"
                         f"link_data{{picture}},"
@@ -444,9 +512,6 @@ class MetaAPIClient:
                     if j == 0 and i == 0:
                         logger.info(f"[{self.market}] creative API sample body: {str(body)[:300]}")
                     oss     = creative.get("object_story_spec", {})
-                    # actor_id is the authoritative Page ID for all ad types
-                    # (dark posts, video ads, catalog ads all populate actor_id)
-                    # object_story_spec.page_id only works for page post boosts
                     page_id = (
                         creative.get("actor_id") or
                         oss.get("page_id", "")
@@ -479,7 +544,6 @@ class MetaAPIClient:
         total_page_ids = sum(1 for v in result.values() if v.get("page_id"))
         logger.info(f"[{self.market}] _batch_get_creative_info: {total_page_ids}/{len(ad_ids)} page_ids resolved")
 
-        # Second pass: CPAS Collection ads — fetch effective_object_story_id
         needs_story = [
             ad_id for ad_id in ad_ids
             if result.get(ad_id, {}).get("page_id")
@@ -579,12 +643,10 @@ class MetaAPIClient:
                     f"type={error_type} | message={error_msg}"
                 )
                 if error_code in (4, 17, 32, 613) or resp.status_code in (429, 503):
-                    # Rate limit or transient server error → retry with backoff
                     wait = self.RETRY_DELAY * attempt
                     logger.warning(f"[{self.market}] Retrying in {wait}s (attempt {attempt}/{self.MAX_RETRIES})...")
                     time.sleep(wait)
                 elif resp.status_code == 500 and "reduce the amount of data" in error_msg:
-                    # Meta data-volume limit — raise immediately so caller can split the range
                     raise requests.HTTPError(
                         f"HTTP 500 reduce-data: {error_msg}", response=resp
                     )
@@ -594,7 +656,7 @@ class MetaAPIClient:
 
     def _paginate(self, url: str, params: dict) -> list[dict]:
         all_rows = []
-        current_url = url
+        current_url    = url
         current_params = params.copy()
         while True:
             resp = self._get(current_url, current_params)
@@ -603,6 +665,6 @@ class MetaAPIClient:
             next_url = resp.get("paging", {}).get("next")
             if not next_url:
                 break
-            current_url = next_url
+            current_url    = next_url
             current_params = {}
         return all_rows
