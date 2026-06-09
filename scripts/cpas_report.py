@@ -51,26 +51,29 @@ def fetch_market(market, date_start, date_stop, pa, time_increment=1):
 
     for acct in accounts:
         logger.info(f"[{market}]   -> {acct['name']} ({acct['id']})"
-                    + (" [LARGE — daily chunks]" if acct["large"] else ""))
+                    + (" [LARGE — async mode]" if acct["large"] else ""))
         acct_rows = []
 
         if acct["large"]:
-            # Large account: skip monthly, go straight to daily chunks
+            # Large account: use async API per month chunk — no data volume limit
             for chunk_start, chunk_end in chunks:
-                for day_start, day_end in daily_chunks(chunk_start, chunk_end):
-                    try:
-                        day_rows = client.get_insights(
-                            ad_account_id=acct["id"], date_start=day_start, date_stop=day_end,
-                            level="ad", fields=INSIGHT_FIELDS, time_increment=time_increment,
-                        )
-                        acct_rows.extend(day_rows)
-                    except Exception as day_e:
-                        if "3018" in str(day_e):
-                            logger.warning(f"[{market}]     Skipping {day_start} (beyond 37-month limit)")
-                        else:
-                            logger.error(f"[{market}]     Error {acct['id']} [{day_start}]: {day_e}")
+                try:
+                    rows = client.get_insights_async(
+                        ad_account_id=acct["id"],
+                        date_start=chunk_start,
+                        date_stop=chunk_end,
+                        level="ad",
+                        fields=INSIGHT_FIELDS,
+                        time_increment=time_increment,
+                    )
+                    acct_rows.extend(rows)
+                except Exception as e:
+                    if "3018" in str(e):
+                        logger.warning(f"[{market}]     Skipping {chunk_start}~{chunk_end} (beyond 37-month limit)")
+                    else:
+                        logger.error(f"[{market}]     Async error {acct['id']} [{chunk_start}~{chunk_end}]: {e}")
         else:
-            # Normal account: try monthly, fallback to daily on 500/timeout
+            # Normal account: synchronous, fallback to daily on 500/timeout
             for chunk_start, chunk_end in chunks:
                 try:
                     rows = client.get_insights(
