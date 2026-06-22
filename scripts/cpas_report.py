@@ -1,14 +1,14 @@
 """HKTW Meta Auto Report - CPAS Report"""
 import os, sys, io, logging
 import pandas as pd
-from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config.settings import SP_PATHS, SP_CONTROL_FILES, MARKETS
+from config.settings import SP_PATHS, MARKETS
 from scripts.meta_api_client import MetaAPIClient
 from scripts.cpas_transformer import transform, OUTPUT_COLUMNS
 from scripts.power_automate_client import PowerAutomateClient
 from scripts.account_loader import load_accounts
+from scripts.all_report import monthly_chunks, daily_chunks, _is_data_volume_error
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -31,39 +31,29 @@ INSIGHT_FIELDS = [
 ]
 
 
-def _is_data_volume_error(e):
-    s = str(e).lower()
-    return "reduce" in s or ("500" in s and "data" in s) or "timed out" in s
-
-
-def fetch_market(market, date_start, date_stop, pa, time_increment=1):
-    logger.info(f"[{market}] Fetching CPAS data {date_start} -> {date_stop}")
+def fetch_market(market, date_start, date_stop, pa, time_increment="monthly"):
+    logger.info(f"[{market}] Fetching CPAS data {date_start} -> {date_stop} (time_increment={time_increment})")
     accounts = load_accounts(market, pa, report_type="CPAS")
     if not accounts:
         return pd.DataFrame(columns=OUTPUT_COLUMNS)
     client = MetaAPIClient(market)
     all_rows = []
-
-    from scripts.all_report import monthly_chunks, daily_chunks
     chunks = monthly_chunks(date_start, date_stop)
     if len(chunks) > 1:
         logger.info(f"[{market}] Date range spans {len(chunks)} months")
 
     for acct in accounts:
         logger.info(f"[{market}]   -> {acct['name']} ({acct['id']})"
-                    + (" [LARGE — async mode]" if acct["large"] else ""))
+                    + (" [LARGE — async]" if acct["large"] else ""))
         acct_rows = []
 
         if acct["large"]:
-            # Large account: use async API per month chunk — no data volume limit
             for chunk_start, chunk_end in chunks:
                 try:
                     rows = client.get_insights_async(
                         ad_account_id=acct["id"],
-                        date_start=chunk_start,
-                        date_stop=chunk_end,
-                        level="ad",
-                        fields=INSIGHT_FIELDS,
+                        date_start=chunk_start, date_stop=chunk_end,
+                        level="ad", fields=INSIGHT_FIELDS,
                         time_increment=time_increment,
                     )
                     acct_rows.extend(rows)
@@ -71,35 +61,36 @@ def fetch_market(market, date_start, date_stop, pa, time_increment=1):
                     if "3018" in str(e):
                         logger.warning(f"[{market}]     Skipping {chunk_start}~{chunk_end} (beyond 37-month limit)")
                     else:
-                        logger.error(f"[{market}]     Async error {acct['id']} [{chunk_start}~{chunk_end}]: {e}")
+                        logger.error(f"[{market}]     Async error [{chunk_start}~{chunk_end}]: {e}")
         else:
-            # Normal account: synchronous, fallback to daily on 500/timeout
             for chunk_start, chunk_end in chunks:
                 try:
                     rows = client.get_insights(
-                        ad_account_id=acct["id"], date_start=chunk_start, date_stop=chunk_end,
-                        level="ad", fields=INSIGHT_FIELDS, time_increment=time_increment,
+                        ad_account_id=acct["id"],
+                        date_start=chunk_start, date_stop=chunk_end,
+                        level="ad", fields=INSIGHT_FIELDS,
+                        time_increment=time_increment,
                     )
                     acct_rows.extend(rows)
                 except Exception as e:
                     if "3018" in str(e):
                         logger.warning(f"[{market}]     Skipping {chunk_start}~{chunk_end} (beyond 37-month limit)")
                     elif _is_data_volume_error(e):
-                        logger.warning(
-                            f"[{market}]     HTTP 500/timeout [{chunk_start}~{chunk_end}] — retrying day by day..."
-                        )
+                        logger.warning(f"[{market}]     HTTP 500/timeout [{chunk_start}~{chunk_end}] — retrying day by day...")
                         for day_start, day_end in daily_chunks(chunk_start, chunk_end):
                             try:
                                 day_rows = client.get_insights(
-                                    ad_account_id=acct["id"], date_start=day_start, date_stop=day_end,
-                                    level="ad", fields=INSIGHT_FIELDS, time_increment=time_increment,
+                                    ad_account_id=acct["id"],
+                                    date_start=day_start, date_stop=day_end,
+                                    level="ad", fields=INSIGHT_FIELDS,
+                                    time_increment=time_increment,
                                 )
                                 acct_rows.extend(day_rows)
                             except Exception as day_e:
                                 if "3018" in str(day_e):
                                     logger.warning(f"[{market}]     Skipping {day_start} (beyond 37-month limit)")
                                 else:
-                                    logger.error(f"[{market}]     Error {acct['id']} [{day_start}]: {day_e}")
+                                    logger.error(f"[{market}]     Error [{day_start}]: {day_e}")
                     else:
                         logger.error(f"[{market}]     Error: {e}")
 
@@ -170,18 +161,6 @@ def load_existing(pa):
         return pd.DataFrame(columns=OUTPUT_COLUMNS)
 
 
-def merge_and_deduplicate(existing, new_data):
-    if new_data.empty: return existing
-    combined = pd.concat([existing, new_data], ignore_index=True)
-    for col in DEDUPE_KEYS:
-        if col in combined.columns:
-            combined[col] = combined[col].astype(str).str.strip()
-    before = len(combined)
-    combined = combined.drop_duplicates(subset=DEDUPE_KEYS, keep="last")
-    logger.info(f"Dedup: {before} -> {len(combined)} rows ({before-len(combined)} removed)")
-    return combined.reset_index(drop=True)
-
-
 def save_to_excel(df):
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
@@ -193,16 +172,17 @@ def main():
     market         = os.environ.get("MARKET", "ALL").upper()
     date_start     = os.environ.get("DATE_START")
     date_stop      = os.environ.get("DATE_STOP")
-    time_increment = os.environ.get("TIME_INCREMENT", "1")
-    if time_increment not in ("1","monthly"): time_increment = "1"
+    time_increment = os.environ.get("TIME_INCREMENT", "monthly")
+    if time_increment not in ("daily","monthly"): time_increment = "monthly"
+    ti_api = "1" if time_increment == "daily" else "monthly"
     if not date_start or not date_stop:
         raise ValueError("DATE_START and DATE_STOP required")
     markets_to_run = list(MARKETS.keys()) if market == "ALL" else [market]
-    logger.info(f"CPAS Report | {markets_to_run} | {date_start} -> {date_stop}")
+    logger.info(f"CPAS Report | {markets_to_run} | {date_start} -> {date_stop} | {time_increment}")
     pa = PowerAutomateClient()
     new_frames = []
     for m in markets_to_run:
-        df_m = fetch_market(m, date_start, date_stop, pa, time_increment)
+        df_m = fetch_market(m, date_start, date_stop, pa, ti_api)
         if not df_m.empty: new_frames.append(df_m)
     new_data = pd.concat(new_frames, ignore_index=True) if new_frames else pd.DataFrame(columns=OUTPUT_COLUMNS)
     logger.info(f"Total new rows: {len(new_data)}")
@@ -214,7 +194,7 @@ def main():
     timestamp = _dt.utcnow().strftime("%Y%m%d_%H%M")
     artifact_dir  = os.environ.get("ARTIFACT_DIR", "report_output")
     os.makedirs(artifact_dir, exist_ok=True)
-    artifact_name = f"CPAS_{mkt_str}_{date_start}_{date_stop}_{timestamp}.xlsx"
+    artifact_name = f"CPAS_{mkt_str}_{date_start}_{date_stop}_{time_increment}_{timestamp}.xlsx"
     artifact_path = os.path.join(artifact_dir, artifact_name)
     with open(artifact_path, "wb") as f:
         f.write(excel_bytes)
