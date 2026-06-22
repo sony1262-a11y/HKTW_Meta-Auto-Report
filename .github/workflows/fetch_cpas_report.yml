@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       market:
-        description: 'Market (HK / TW / ALL)'
+        description: 'Market'
         required: true
         default: 'ALL'
         type: choice
@@ -19,18 +19,18 @@ on:
       time_increment:
         description: 'Time breakdown'
         required: true
-        default: '1'
+        default: 'monthly'
         type: choice
-        options: ['1', 'monthly']
+        options: ['monthly', 'daily']
 jobs:
   fetch-cpas:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: '3.11'}
-      - run: pip install requests pandas openpyxl
+      - run: pip install requests pandas openpyxl python-dateutil
       - name: Fetch CPAS data
         env:
           META_HK_APP_ID:       ${{ secrets.META_HK_APP_ID }}
@@ -53,6 +53,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: cpas-${{ github.event.inputs.market }}-${{ github.event.inputs.date_start }}-${{ github.event.inputs.date_stop }}
+          name: cpas-${{ github.event.inputs.market }}-${{ github.event.inputs.date_start }}-${{ github.event.inputs.date_stop }}-${{ github.event.inputs.time_increment }}
           path: report_output/
           retention-days: 30

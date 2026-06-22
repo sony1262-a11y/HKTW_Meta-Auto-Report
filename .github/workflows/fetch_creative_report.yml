@@ -1,4 +1,4 @@
-name: Fetch All Meta Report
+name: Fetch Creative Report
 on:
   workflow_dispatch:
     inputs:
@@ -9,35 +9,23 @@ on:
         type: choice
         options: [ALL, HK, TW]
       date_start:
-        description: 'Start date (YYYY-MM-DD)'
+        description: 'Start date (YYYY-MM-DD) — used to find active ads in range'
         required: true
         type: string
       date_stop:
         description: 'End date (YYYY-MM-DD)'
         required: true
         type: string
-      time_increment:
-        description: 'Time breakdown'
-        required: true
-        default: 'monthly'
-        type: choice
-        options: ['monthly', 'daily']
-      breakdown:
-        description: 'Dimension breakdown'
-        required: true
-        default: 'platform_placement'
-        type: choice
-        options: ['none', 'platform_placement', 'age_gender']
 jobs:
-  fetch-all:
+  fetch-creative:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: '3.11'}
       - run: pip install requests pandas openpyxl python-dateutil
-      - name: Fetch All Meta data
+      - name: Fetch Creative data
         env:
           META_HK_APP_ID:       ${{ secrets.META_HK_APP_ID }}
           META_HK_APP_SECRET:   ${{ secrets.META_HK_APP_SECRET }}
@@ -50,16 +38,14 @@ jobs:
           MARKET:               ${{ github.event.inputs.market }}
           DATE_START:           ${{ github.event.inputs.date_start }}
           DATE_STOP:            ${{ github.event.inputs.date_stop }}
-          TIME_INCREMENT:       ${{ github.event.inputs.time_increment }}
-          BREAKDOWN:            ${{ github.event.inputs.breakdown }}
           ARTIFACT_DIR:         report_output
         run: |
           mkdir -p report_output
-          python scripts/all_report.py
+          python scripts/creative_report.py
       - name: Upload report as artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: all-meta-${{ github.event.inputs.market }}-${{ github.event.inputs.date_start }}-${{ github.event.inputs.date_stop }}-${{ github.event.inputs.time_increment }}-${{ github.event.inputs.breakdown }}
+          name: creative-${{ github.event.inputs.market }}-${{ github.event.inputs.date_start }}-${{ github.event.inputs.date_stop }}
           path: report_output/
           retention-days: 30
